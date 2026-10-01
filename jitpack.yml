@@ -1,0 +1,4 @@
+jdk:
+  - openjdk17
+install:
+  - ./gradlew clean testDebugUnitTest publishReleasePublicationToMavenLocal --no-daemon
