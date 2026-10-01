@@ -2,7 +2,7 @@ package ernest.ascrcpy.adb.crypto
 
 import android.content.Context
 import android.util.Base64
-import ernest.ascrcpy.adb.AdbKeyProvider
+import ernest.ascrcpy.adb.AdbTlsKeyProvider
 import java.math.BigInteger
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -15,7 +15,7 @@ import java.security.spec.X509EncodedKeySpec
 import javax.crypto.Cipher
 
 /** Persistent 2048-bit RSA identity compatible with the adbd authentication protocol. */
-class FileAdbKeyProvider private constructor(private val keyPair: KeyPair) : AdbKeyProvider {
+class FileAdbKeyProvider private constructor(override val keyPair: KeyPair) : AdbTlsKeyProvider {
     override fun sign(token: ByteArray): ByteArray {
         require(token.size == 20) { "adbd authentication tokens must contain 20 bytes" }
         val sha1DigestInfo = byteArrayOf(

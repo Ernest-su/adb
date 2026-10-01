@@ -1,6 +1,13 @@
 package ernest.ascrcpy.adb.demo
 
 import android.app.Activity
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowInsets
@@ -12,6 +19,7 @@ import android.widget.TextView
 import ernest.ascrcpy.adb.AdbClient
 import ernest.ascrcpy.adb.AdbEndpoint
 import ernest.ascrcpy.adb.DefaultAdbClient
+import ernest.ascrcpy.adb.transport.UsbAdbTransport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -28,11 +36,28 @@ class MainActivity : Activity() {
 
     private lateinit var hostInput: EditText
     private lateinit var portInput: EditText
+    private lateinit var pairingPortInput: EditText
+    private lateinit var pairingCodeInput: EditText
     private lateinit var connectButton: Button
+    private lateinit var pairButton: Button
+    private lateinit var wirelessButton: Button
+    private lateinit var usbButton: Button
     private lateinit var shellButton: Button
     private lateinit var disconnectButton: Button
     private lateinit var statusView: TextView
     private lateinit var outputView: TextView
+    private val usbManager by lazy { getSystemService(Context.USB_SERVICE) as UsbManager }
+    private val usbPermissionAction by lazy { "$packageName.USB_PERMISSION" }
+    private val usbReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != usbPermissionAction) return
+            @Suppress("DEPRECATION")
+            val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+            if (device != null && intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
+                connectUsb(device)
+            } else showStatus("USB permission denied")
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -60,9 +85,15 @@ class MainActivity : Activity() {
             }
         }
         setContentView(scroll)
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(usbReceiver, IntentFilter(usbPermissionAction), Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(usbReceiver, IntentFilter(usbPermissionAction))
+        }
 
         content.addView(TextView(this).apply {
-            text = "Connect to a device with TCP ADB already enabled"
+            text = "Connect with TCP ADB, Android 11+ Wireless debugging, or USB"
             textSize = 18f
         })
         hostInput = EditText(this).apply {
@@ -80,10 +111,29 @@ class MainActivity : Activity() {
         }
         content.addView(portInput)
 
+        pairingPortInput = EditText(this).apply {
+            hint = "Wireless pairing port (different from connection port)"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            setSingleLine()
+        }
+        content.addView(pairingPortInput)
+        pairingCodeInput = EditText(this).apply {
+            hint = "Six-digit pairing code"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            setSingleLine()
+        }
+        content.addView(pairingCodeInput)
+
         connectButton = Button(this).apply { text = "Connect" }
+        pairButton = Button(this).apply { text = "Pair wireless" }
+        wirelessButton = Button(this).apply { text = "Connect wireless" }
+        usbButton = Button(this).apply { text = "Connect USB" }
         shellButton = Button(this).apply { text = "Read device model" }
         disconnectButton = Button(this).apply { text = "Disconnect" }
         content.addView(connectButton)
+        content.addView(pairButton)
+        content.addView(wirelessButton)
+        content.addView(usbButton)
         content.addView(shellButton)
         content.addView(disconnectButton)
 
@@ -95,11 +145,22 @@ class MainActivity : Activity() {
         updateButtons()
 
         connectButton.setOnClickListener { connect() }
+        pairButton.setOnClickListener { pairWireless() }
+        wirelessButton.setOnClickListener { connectWireless() }
+        usbButton.setOnClickListener { selectUsb() }
         shellButton.setOnClickListener { readDeviceModel() }
         disconnectButton.setOnClickListener { disconnect() }
     }
 
     private fun connect() {
+        connectWith(wireless = false)
+    }
+
+    private fun connectWireless() {
+        connectWith(wireless = true)
+    }
+
+    private fun connectWith(wireless: Boolean) {
         val host = hostInput.text.toString().trim()
         val port = portInput.text.toString().toIntOrNull()
         if (host.isEmpty() || port == null || port !in 1..65535) {
@@ -108,16 +169,65 @@ class MainActivity : Activity() {
         }
         val endpoint = AdbEndpoint(host, port)
         launchAction {
-            showStatus("Connecting to ${endpoint.serial}. Approve the RSA prompt on the device if shown.")
+            showStatus("Connecting to ${endpoint.serial}")
             outputView.text = ""
             withContext(Dispatchers.IO) {
                 client?.close()
                 client = DefaultAdbClient.factory(applicationContext).create()
-                client!!.connect(endpoint)
+                if (wireless) client!!.connectWireless(endpoint) else client!!.connect(endpoint)
             }
             connected = true
             showStatus("Connected to ${endpoint.serial}")
         }
+    }
+
+    private fun pairWireless() {
+        val host = hostInput.text.toString().trim()
+        val port = pairingPortInput.text.toString().toIntOrNull()
+        val code = pairingCodeInput.text.toString().trim()
+        if (host.isEmpty() || port == null || port !in 1..65535 || !code.matches(Regex("[0-9]{6}"))) {
+            showStatus("Enter host, wireless pairing port, and six-digit code")
+            return
+        }
+        launchAction {
+            showStatus("Pairing with $host:$port")
+            val guid = withContext(Dispatchers.IO) {
+                val pairingClient = DefaultAdbClient.factory(applicationContext).create()
+                try { pairingClient.pairWireless(AdbEndpoint(host, port), code) }
+                finally { pairingClient.close() }
+            }
+            pairingCodeInput.text.clear()
+            showStatus("Paired ($guid). Enter the separate connection port, then Connect wireless.")
+        }
+    }
+
+    private fun selectUsb() {
+        val devices = UsbAdbTransport.discover(usbManager)
+        if (devices.isEmpty()) {
+            showStatus("No USB ADB device found. Check USB Host mode and USB debugging.")
+            return
+        }
+        val device = devices.first()
+        if (usbManager.hasPermission(device)) {
+            connectUsb(device)
+        } else {
+            val intent = PendingIntent.getBroadcast(
+                this, 0, Intent(usbPermissionAction).setPackage(packageName),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+            )
+            usbManager.requestPermission(device, intent)
+        }
+    }
+
+    private fun connectUsb(device: UsbDevice) = launchAction {
+        showStatus("Connecting USB ${device.deviceName}")
+        withContext(Dispatchers.IO) {
+            client?.close()
+            client = DefaultAdbClient.factory(applicationContext).create()
+            client!!.connectUsb(device)
+        }
+        connected = true
+        showStatus("Connected via USB")
     }
 
     private fun readDeviceModel() = launchAction {
@@ -159,11 +269,15 @@ class MainActivity : Activity() {
 
     private fun updateButtons() {
         connectButton.isEnabled = !busy
+        pairButton.isEnabled = !busy
+        wirelessButton.isEnabled = !busy
+        usbButton.isEnabled = !busy
         shellButton.isEnabled = connected && !busy
         disconnectButton.isEnabled = connected && !busy
     }
 
     override fun onDestroy() {
+        unregisterReceiver(usbReceiver)
         scope.cancel()
         client?.close()
         super.onDestroy()

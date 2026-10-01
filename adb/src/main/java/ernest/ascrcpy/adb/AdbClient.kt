@@ -1,5 +1,6 @@
 package ernest.ascrcpy.adb
 
+import android.hardware.usb.UsbDevice
 import java.io.Closeable
 import java.io.InputStream
 import kotlinx.coroutines.flow.StateFlow
@@ -8,16 +9,18 @@ import kotlinx.coroutines.flow.StateFlow
 data class AdbEndpoint(
     val host: String,
     val port: Int = DEFAULT_ADB_PORT,
+    val usb: Boolean = false,
 ) {
     init {
         require(host.isNotBlank()) { "ADB host must not be blank" }
-        require(port in 1..65535) { "ADB port must be between 1 and 65535" }
+        require(usb || port in 1..65535) { "ADB port must be between 1 and 65535" }
     }
 
-    val serial: String get() = "$host:$port"
+    val serial: String get() = if (usb) "usb:$host" else "$host:$port"
 
     companion object {
         const val DEFAULT_ADB_PORT = 5555
+        fun usb(device: UsbDevice) = AdbEndpoint(device.deviceName, usb = true)
     }
 }
 
@@ -51,6 +54,18 @@ interface AdbClient : Closeable {
     val state: StateFlow<AdbConnectionState>
 
     suspend fun connect(endpoint: AdbEndpoint): AdbDevice
+
+    /** The caller must first obtain UsbManager permission for [device]. */
+    suspend fun connectUsb(device: UsbDevice): AdbDevice =
+        throw UnsupportedOperationException("USB transport is unavailable")
+
+    /** Pair with the temporary pairing port and six-digit code shown by Wireless debugging. */
+    suspend fun pairWireless(pairingEndpoint: AdbEndpoint, code: String): String =
+        throw UnsupportedOperationException("Wireless pairing is unavailable")
+
+    /** Connect to the separate Wireless debugging connection port after pairing. */
+    suspend fun connectWireless(endpoint: AdbEndpoint): AdbDevice =
+        throw UnsupportedOperationException("Wireless debugging is unavailable")
 
     suspend fun disconnect()
 

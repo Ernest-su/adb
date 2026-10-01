@@ -1,6 +1,6 @@
 # Android ADB client
 
-A reusable Android ADB host library extracted from [AScrcpy](https://github.com/Ernest-su/ascrcpy). It connects directly to an already enabled TCP `adbd` (usually port 5555), handles RSA authorization, executes shell commands, pushes files, and opens multiplexed ADB services. It does not provide Android 11 wireless pairing or USB transport. Minimum Android API: 26.
+A reusable Android ADB host library extracted from [AScrcpy](https://github.com/Ernest-su/ascrcpy). It supports legacy TCP ADB, Android 11+ Wireless debugging pairing and TLS connections, and Android USB Host connections. It handles RSA authorization, shell commands, file pushes, and multiplexed ADB services. Minimum Android API: 26.
 
 This AGP 9.0.1 project has two modules: `:adb` contains the reusable AAR, and `:app` is an installable demo that depends on `:adb`.
 
@@ -29,9 +29,43 @@ try {
 
 `AdbClient`, `AdbChannel`, `AdbEndpoint`, `AdbKeyProvider`, and `AdbTransport` provide the stable public boundary. The default key provider stores its RSA identity in the application's no-backup directory. The target device can require the user to authorize it on first connection. Keep remote shell commands fixed and validate user input before composing them.
 
+### Android 11+ Wireless debugging
+
+Enable **Wireless debugging** on the target device. In **Pair device with pairing code**, note the temporary pairing address/port and six-digit code. Pair once, then use the **separate connection port** shown on the main Wireless debugging screen. These ports may change when the setting is toggled. This library currently accepts explicit addresses and ports; it does not discover them with mDNS.
+
+```kotlin
+val client = DefaultAdbClient.factory(applicationContext).create()
+try {
+    client.pairWireless(AdbEndpoint("192.168.1.20", 37123), "123456")
+    client.connectWireless(AdbEndpoint("192.168.1.20", 39999))
+    println(client.shell("getprop ro.product.model").text())
+} finally {
+    client.close()
+}
+```
+
+The same persistent RSA identity is used for TCP, USB, pairing, and wireless TLS. Wireless pairing uses direct protocol code in this library plus general-purpose Conscrypt, Bouncy Castle, and SPAKE2 crypto dependencies; it does not depend on another ADB library.
+
+### USB Host
+
+The device running the app must support USB Host mode. Enable USB debugging on the target device, connect it by USB, and approve both the Android USB permission dialog on the host and the RSA debugging authorization on the target. Obtain `UsbManager` permission with `requestPermission()` before calling `connectUsb()`; the demo shows this flow.
+
+```kotlin
+val manager = getSystemService(UsbManager::class.java)
+val device = UsbAdbTransport.discover(manager).first()
+check(manager.hasPermission(device)) // Request permission in the app UI if needed.
+val client = DefaultAdbClient.factory(applicationContext).create()
+try {
+    client.connectUsb(device)
+    println(client.shell("getprop ro.product.model").text())
+} finally {
+    client.close()
+}
+```
+
 ## Demo
 
-Run `./gradlew :app:assembleDebug --no-daemon` and install `app/build/outputs/apk/debug/app-debug.apk` on an Android device. Enable TCP ADB on a second device, enter its host and port in the demo, and approve its RSA authorization prompt. The **Read device model** button runs `getprop ro.product.model` through the library and displays its output.
+Run `./gradlew :app:assembleDebug --no-daemon` and install `app/build/outputs/apk/debug/app-debug.apk` on an Android device. The demo offers TCP, wireless pairing/connection, and USB Host buttons. The **Read device model** button runs `getprop ro.product.model` through the library and displays its output.
 
 ## Verify and release
 
