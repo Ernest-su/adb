@@ -3,6 +3,7 @@ package ernest.ascrcpy.adb
 import android.hardware.usb.UsbDevice
 import java.io.Closeable
 import java.io.InputStream
+import java.io.OutputStream
 import kotlinx.coroutines.flow.StateFlow
 
 /** Network address of an Android Debug Bridge daemon. */
@@ -72,6 +73,9 @@ interface AdbClient : Closeable {
     suspend fun shell(command: String): AdbCommandResult
 
     suspend fun push(source: InputStream, remotePath: String, mode: Int = 0x1A4)
+
+    /** Downloads a remote file through the ADB sync service. */
+    suspend fun pull(remotePath: String, destination: OutputStream)
 
     /** Opens an arbitrary adbd service such as `localabstract:scrcpy_12345678`. */
     suspend fun open(service: String): AdbChannel

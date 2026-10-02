@@ -21,6 +21,7 @@ import ernest.ascrcpy.adb.transport.TlsAdbTransport
 import ernest.ascrcpy.adb.transport.UsbAdbTransport
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
+import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.time.Instant
@@ -192,6 +193,29 @@ class DefaultAdbClient(
                 throw AdbException(channel.readExactly(length).toString(Charsets.UTF_8))
             }
             if (id != "OKAY") throw AdbProtocolException("Unexpected sync response: $id")
+        } finally {
+            channel.close()
+        }
+    }
+
+    override suspend fun pull(remotePath: String, destination: OutputStream) = operationMutex.withLock {
+        require(remotePath.startsWith('/')) { "Remote path must be absolute" }
+        val channel = open("sync:")
+        try {
+            channel.writeSync("RECV", remotePath.toByteArray())
+            while (true) {
+                val header = channel.readExactly(8)
+                val id = header.copyOfRange(0, 4).toString(Charsets.US_ASCII)
+                val length = ByteBuffer.wrap(header, 4, 4).order(ByteOrder.LITTLE_ENDIAN).int
+                if (length < 0) throw AdbProtocolException("Invalid sync payload length: $length")
+                when (id) {
+                    "DATA" -> destination.write(channel.readExactly(length))
+                    "DONE" -> break
+                    "FAIL" -> throw AdbException(channel.readExactly(length).toString(Charsets.UTF_8))
+                    else -> throw AdbProtocolException("Unexpected sync response: $id")
+                }
+            }
+            destination.flush()
         } finally {
             channel.close()
         }

@@ -29,6 +29,16 @@ try {
 
 `AdbClient`, `AdbChannel`, `AdbEndpoint`, `AdbKeyProvider`, and `AdbTransport` provide the stable public boundary. The default key provider stores its RSA identity in the application's no-backup directory. The target device can require the user to authorize it on first connection. Keep remote shell commands fixed and validate user input before composing them.
 
+The demo app is a Compose-based target device manager. After a TCP, Wireless debugging,
+or USB connection it can show device properties, installed application names and versions,
+browse remote files with type/size/modified metadata, and download files or folders through
+the ADB sync `RECV` (`pull`) service without installing anything on the target. Downloads use
+Android's system folder picker.
+
+Connection, authentication, shell, push, and pull diagnostics are emitted under the
+`AdbClient` logcat tag. The demo adds higher-level failures under `AdbManager` and
+`AdbDeviceManager`.
+
 ### Android 11+ Wireless debugging
 
 Enable **Wireless debugging** on the target device. In **Pair device with pairing code**, note the temporary pairing address/port and six-digit code. Pair once, then use the **separate connection port** shown on the main Wireless debugging screen. These ports may change when the setting is toggled. The library accepts explicit addresses and ports; the demo app additionally discovers services with Android NSD for QR pairing.
