@@ -10,7 +10,7 @@ Add `maven { url = uri("https://jitpack.io") }` to `dependencyResolutionManageme
 
 ```kotlin
 dependencies {
-    implementation("com.github.Ernest-su:adb:v0.1.0")
+    implementation("com.github.Ernest-su:adb:v0.2.0")
 }
 ```
 
@@ -29,11 +29,10 @@ try {
 
 `AdbClient`, `AdbChannel`, `AdbEndpoint`, `AdbKeyProvider`, and `AdbTransport` provide the stable public boundary. The default key provider stores its RSA identity in the application's no-backup directory. The target device can require the user to authorize it on first connection. Keep remote shell commands fixed and validate user input before composing them.
 
-The demo app is a Compose-based target device manager. After a TCP, Wireless debugging,
-or USB connection it can show device properties, installed application names and versions,
-browse remote files with type/size/modified metadata, and download files or folders through
-the ADB sync `RECV` (`pull`) service without installing anything on the target. Downloads use
-Android's system folder picker.
+The demo app provides TCP, Wireless debugging, and USB connection flows. The library can
+download files through the ADB sync `RECV` (`pull`) service without installing anything on
+the target. The demo's `DeviceManager` helper can query device properties and installed apps,
+browse remote files, and download files or folders through Android's system folder picker.
 
 Connection, authentication, shell, push, and pull diagnostics are emitted under the
 `AdbClient` logcat tag. The demo adds higher-level failures under `AdbManager` and
