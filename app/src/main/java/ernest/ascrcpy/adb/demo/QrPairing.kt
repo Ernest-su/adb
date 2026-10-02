@@ -39,7 +39,7 @@ internal class QrPairing {
 /** Resolves the scanned phone's pairing service and available wireless connection services. */
 internal class QrPairingDiscovery(
     context: Context,
-    private val serviceName: String,
+    private val serviceName: String?,
     private val onPairing: (ResolvedService) -> Unit,
     private val onConnection: (ResolvedService) -> Unit,
     private val onError: (Int?) -> Unit,
@@ -60,7 +60,7 @@ internal class QrPairingDiscovery(
         if (active) return
         active = true
         multicastLock.acquire()
-        discover(PAIRING_TYPE)
+        if (serviceName != null) discover(PAIRING_TYPE)
         discover(CONNECTION_TYPE)
     }
 

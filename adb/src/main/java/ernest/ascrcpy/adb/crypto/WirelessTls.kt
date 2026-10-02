@@ -13,22 +13,39 @@ import javax.net.ssl.SSLSocket
 import javax.net.ssl.X509ExtendedKeyManager
 import javax.net.ssl.X509TrustManager
 import org.bouncycastle.asn1.x500.X500Name
+import org.bouncycastle.asn1.x509.BasicConstraints
+import org.bouncycastle.asn1.x509.Extension
+import org.bouncycastle.asn1.x509.KeyUsage
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder
+import org.bouncycastle.cert.jcajce.JcaX509ExtensionUtils
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
 import org.conscrypt.Conscrypt
 
 /** TLS credentials backed by the same RSA key as classic ADB authorization. */
 internal class WirelessTls(private val identity: KeyPair) {
     private val certificate: X509Certificate by lazy {
-        val name = X500Name("CN=ADB Host")
+        // Match adb's GenerateX509Certificate(). Some adbd implementations reject
+        // a paired key when its TLS certificate lacks the ADB CA/key-usage fields.
+        val name = X500Name("C=US,O=Android,CN=Adb")
         val now = System.currentTimeMillis()
         val builder = JcaX509v3CertificateBuilder(
             name,
-            BigInteger(128, SecureRandom()),
-            Date(now - 60_000),
+            BigInteger.ONE,
+            Date(now),
             Date(now + 3650L * 24 * 60 * 60 * 1000),
             name,
             identity.public,
+        )
+        builder.addExtension(Extension.basicConstraints, true, BasicConstraints(true))
+        builder.addExtension(
+            Extension.keyUsage,
+            true,
+            KeyUsage(KeyUsage.keyCertSign or KeyUsage.cRLSign or KeyUsage.digitalSignature),
+        )
+        builder.addExtension(
+            Extension.subjectKeyIdentifier,
+            false,
+            JcaX509ExtensionUtils().createSubjectKeyIdentifier(identity.public),
         )
         val signed = builder.build(JcaContentSignerBuilder("SHA256withRSA").build(identity.private))
         CertificateFactory.getInstance("X.509")

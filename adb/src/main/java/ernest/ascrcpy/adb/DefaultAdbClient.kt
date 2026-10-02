@@ -3,6 +3,7 @@ package ernest.ascrcpy.adb
 import android.content.Context
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.net.Network
 import ernest.ascrcpy.adb.crypto.FileAdbKeyProvider
 import ernest.ascrcpy.adb.crypto.WirelessPairing
 import ernest.ascrcpy.adb.crypto.WirelessTls
@@ -47,6 +48,7 @@ class DefaultAdbClient(
         TcpAdbTransport(host, port)
     },
     private val usbManager: UsbManager? = null,
+    private val network: Network? = null,
 ) : AdbClient {
     private val mutableState = MutableStateFlow<AdbConnectionState>(AdbConnectionState.Disconnected)
     override val state: StateFlow<AdbConnectionState> = mutableState.asStateFlow()
@@ -72,13 +74,13 @@ class DefaultAdbClient(
     )
 
     override suspend fun pairWireless(pairingEndpoint: AdbEndpoint, code: String): String =
-        WirelessPairing(requireTlsKeys()).pair(pairingEndpoint, code)
+        WirelessPairing(requireTlsKeys(), network).pair(pairingEndpoint, code)
 
     override suspend fun connectWireless(endpoint: AdbEndpoint): AdbDevice {
         require(!endpoint.usb) { "Wireless debugging requires a network endpoint" }
         return connectTransport(
             endpoint,
-            TlsAdbTransport(endpoint.host, endpoint.port, WirelessTls(requireTlsKeys().keyPair)),
+            TlsAdbTransport(endpoint.host, endpoint.port, WirelessTls(requireTlsKeys().keyPair), network),
         )
     }
 
@@ -334,12 +336,14 @@ class DefaultAdbClient(
     companion object {
         private val CLIENT_BANNER = "host::features=shell_v2,cmd,stat_v2\u0000".toByteArray()
 
-        fun factory(context: Context): AdbClientFactory {
+        fun factory(context: Context, network: Network? = null): AdbClientFactory {
             val appContext = context.applicationContext
             return AdbClientFactory {
                 DefaultAdbClient(
                     FileAdbKeyProvider.create(appContext),
+                    transportFactory = AdbTransportFactory { host, port -> TcpAdbTransport(host, port, network = network) },
                     usbManager = appContext.getSystemService(Context.USB_SERVICE) as UsbManager,
+                    network = network,
                 )
             }
         }

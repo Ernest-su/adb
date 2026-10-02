@@ -12,6 +12,7 @@ import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
+import android.util.Log
 import android.view.View
 import android.view.WindowInsets
 import android.widget.Button
@@ -62,8 +63,6 @@ class MainActivity : Activity() {
     private lateinit var pairingHostInput: EditText
     private lateinit var pairingPortInput: EditText
     private lateinit var pairingCodeInput: EditText
-    private lateinit var wirelessHostInput: EditText
-    private lateinit var wirelessPortInput: EditText
     private lateinit var shellButton: Button
     private lateinit var disconnectButton: Button
     private lateinit var statusView: TextView
@@ -169,7 +168,7 @@ class MainActivity : Activity() {
         }
         panel.addView(tcpHostInput)
         panel.addView(tcpPortInput)
-        panel.addView(button(R.string.connect_tcp) { connectWith(tcpHostInput, tcpPortInput, false) })
+        panel.addView(button(R.string.connect_tcp) { connectTcp() })
     }
 
     private fun buildWirelessCodePanel(parent: LinearLayout) {
@@ -183,14 +182,6 @@ class MainActivity : Activity() {
         panel.addView(pairingPortInput)
         panel.addView(pairingCodeInput)
         panel.addView(button(R.string.pair_wireless) { pairWireless() })
-        panel.addView(heading(R.string.connection_details))
-        wirelessHostInput = field(R.string.wireless_host_hint, false)
-        wirelessPortInput = field(R.string.wireless_port_hint, true)
-        panel.addView(wirelessHostInput)
-        panel.addView(wirelessPortInput)
-        panel.addView(button(R.string.connect_wireless) {
-            connectWith(wirelessHostInput, wirelessPortInput, true)
-        })
     }
 
     private fun buildQrPanel(parent: LinearLayout) {
@@ -241,8 +232,8 @@ class MainActivity : Activity() {
         if (label != R.string.clear_log) actionButtons.add(this)
     }
 
-    private fun connectWith(hostInput: EditText, portInput: EditText, wireless: Boolean) {
-        val endpoint = endpoint(hostInput, portInput) ?: return
+    private fun connectTcp() {
+        val endpoint = endpoint(tcpHostInput, tcpPortInput) ?: return
         launchAction {
             showStatus(R.string.status_connecting, endpoint.serial)
             outputView.text = ""
@@ -250,7 +241,7 @@ class MainActivity : Activity() {
             withContext(Dispatchers.IO) {
                 client?.close()
                 client = DefaultAdbClient.factory(applicationContext).create()
-                if (wireless) client!!.connectWireless(endpoint) else client!!.connect(endpoint)
+                client!!.connect(endpoint)
             }
             connected = true
             showStatus(R.string.status_connected, endpoint.serial)
@@ -276,15 +267,56 @@ class MainActivity : Activity() {
             return
         }
         launchAction {
-            showStatus(R.string.status_pairing, "$host:$port")
-            val guid = withContext(Dispatchers.IO) {
-                val pairingClient = DefaultAdbClient.factory(applicationContext).create()
-                try { pairingClient.pairWireless(AdbEndpoint(host, port), code) }
-                finally { pairingClient.close() }
+            val connections = Channel<QrPairingDiscovery.ResolvedService>(Channel.UNLIMITED)
+            val discovery = QrPairingDiscovery(
+                this@MainActivity,
+                serviceName = null,
+                onPairing = { },
+                onConnection = { connections.trySend(it) },
+                onError = { errorCode ->
+                    if (errorCode != null) appendLog(getString(R.string.log_discovery_code, errorCode))
+                },
+            )
+            try {
+                discovery.start()
+                showStatus(R.string.status_pairing, "$host:$port")
+                val guid = withContext(Dispatchers.IO) {
+                    val pairingClient = DefaultAdbClient.factory(applicationContext).create()
+                    try { pairingClient.pairWireless(AdbEndpoint(host, port), code) }
+                    finally { pairingClient.close() }
+                }
+                pairingCodeInput.text.clear()
+                showStatus(R.string.status_finding_connection, guid)
+                val connection = withTimeoutOrNull(30_000) {
+                    while (true) {
+                        val candidate = connections.receive()
+                        if (candidate.name.contains(guid, ignoreCase = true)) {
+                            return@withTimeoutOrNull candidate
+                        }
+                    }
+                    @Suppress("UNREACHABLE_CODE")
+                    null
+                }
+                if (connection == null) {
+                    showStatus(R.string.status_connection_not_found, guid)
+                } else {
+                    // An explicitly entered Tailscale address selects that route. mDNS still
+                    // supplies the short-lived connection port, but must not replace the host.
+                    val useTailscale = host.isTailscaleAddress()
+                    val endpoint = AdbEndpoint(if (useTailscale) host else connection.host, connection.port)
+                    connected = false
+                    withContext(Dispatchers.IO) {
+                        client?.close()
+                        client = DefaultAdbClient.factory(applicationContext).create()
+                        client!!.connectWireless(endpoint)
+                    }
+                    connected = true
+                    showStatus(R.string.status_paired_connected, endpoint.serial)
+                }
+            } finally {
+                discovery.stop()
+                connections.close()
             }
-            pairingCodeInput.text.clear()
-            if (wirelessHostInput.text.isBlank()) wirelessHostInput.setText(host)
-            showStatus(R.string.status_paired, guid)
         }
     }
 
@@ -340,12 +372,14 @@ class MainActivity : Activity() {
                                 @Suppress("UNREACHABLE_CODE")
                                 null
                             }
-                            wirelessHostInput.setText(service.host)
                             if (connection == null) {
-                                modeButtons.getValue(Mode.WIRELESS_CODE).isChecked = true
                                 showStatus(R.string.status_connection_not_found, guid)
                             } else {
-                                val endpoint = AdbEndpoint(connection.host, connection.port)
+                                val useTailscale = service.host.isTailscaleAddress()
+                                val endpoint = AdbEndpoint(
+                                    if (useTailscale) service.host else connection.host,
+                                    connection.port,
+                                )
                                 connected = false
                                 withContext(Dispatchers.IO) {
                                     client?.close()
@@ -353,8 +387,6 @@ class MainActivity : Activity() {
                                     client!!.connectWireless(endpoint)
                                 }
                                 connected = true
-                                wirelessHostInput.setText(connection.host)
-                                wirelessPortInput.setText(connection.port.toString())
                                 showStatus(R.string.status_paired_connected, endpoint.serial)
                             }
                         } finally {
@@ -444,8 +476,9 @@ class MainActivity : Activity() {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
+                Log.e(TAG, "ADB operation failed", error)
                 showStatus(R.string.status_operation_failed)
-                appendLog(getString(R.string.log_error_detail, error.message ?: error.javaClass.simpleName))
+                appendLog(getString(R.string.log_error_detail, error.describe()))
             } finally {
                 busy = false
                 updateButtons()
@@ -491,6 +524,19 @@ class MainActivity : Activity() {
     private val Int.dp: Int get() = (this * resources.displayMetrics.density).toInt()
 
     private companion object {
+        const val TAG = "AdbDemo"
         const val STATE_MODE = "connection_mode"
     }
+}
+
+private fun Throwable.describe(): String = generateSequence(this) { current ->
+    current.cause?.takeUnless { it === current }
+}.map { it.message ?: it.javaClass.simpleName }.distinct().joinToString(": ")
+
+internal fun String.isTailscaleAddress(): Boolean {
+    val normalized = trim().removePrefix("[").removeSuffix("]").lowercase()
+    if (normalized.startsWith("fd7a:115c:a1e0:")) return true
+    val octets = normalized.split('.').mapNotNull(String::toIntOrNull)
+    return octets.size == 4 && octets.all { it in 0..255 } &&
+        octets[0] == 100 && octets[1] in 64..127
 }

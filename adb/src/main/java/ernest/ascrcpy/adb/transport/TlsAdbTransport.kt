@@ -1,5 +1,6 @@
 package ernest.ascrcpy.adb.transport
 
+import android.net.Network
 import ernest.ascrcpy.adb.crypto.WirelessTls
 import java.io.EOFException
 import java.net.InetSocketAddress
@@ -12,14 +13,16 @@ internal class TlsAdbTransport(
     private val host: String,
     private val port: Int,
     private val tls: WirelessTls,
+    private val network: Network? = null,
 ) : AdbTransport {
     private var socket: Socket? = null
 
     override suspend fun connect() = withContext(Dispatchers.IO) {
         check(socket == null)
         socket = Socket().apply {
+            network?.bindSocket(this)
             tcpNoDelay = true
-            connect(InetSocketAddress(host, port), 10_000)
+            connect(InetSocketAddress(host, this@TlsAdbTransport.port), 10_000)
         }
     }
 

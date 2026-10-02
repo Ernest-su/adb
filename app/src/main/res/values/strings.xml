@@ -46,7 +46,7 @@
     <string name="status_qr_cancelled">QR pairing cancelled.</string>
     <string name="status_qr_scanned">QR scanned. Pairing with %1$s…</string>
     <string name="status_finding_connection">Paired (%1$s). Finding the wireless connection…</string>
-    <string name="status_connection_not_found">Paired (%1$s). Connection service not found; enter the connection port shown on the device.</string>
+    <string name="status_connection_not_found">Paired (%1$s), but the connection service was not found. Keep Wireless debugging enabled and try again.</string>
     <string name="status_paired_connected">Paired and connected to %1$s</string>
     <string name="status_discovery_failed">Network discovery failed.</string>
     <string name="status_usb_missing">No USB ADB device found. Check USB Host mode and USB debugging.</string>

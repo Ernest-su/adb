@@ -1,5 +1,6 @@
 package ernest.ascrcpy.adb.crypto
 
+import android.net.Network
 import com.flyfish233.crypto.spake2.Spake2Context
 import com.flyfish233.crypto.spake2.Spake2Role
 import ernest.ascrcpy.adb.AdbAuthenticationException
@@ -21,12 +22,16 @@ import kotlinx.coroutines.withContext
 import org.conscrypt.Conscrypt
 
 /** AOSP wireless pairing protocol; the returned GUID identifies the paired device. */
-internal class WirelessPairing(private val keys: AdbTlsKeyProvider) {
+internal class WirelessPairing(
+    private val keys: AdbTlsKeyProvider,
+    private val network: Network? = null,
+) {
     suspend fun pair(endpoint: AdbEndpoint, code: String): String = withContext(Dispatchers.IO) {
         require(!endpoint.usb) { "Pairing requires a network endpoint" }
         require(code.isNotEmpty()) { "Pairing password must not be empty" }
         val raw = Socket()
         try {
+            network?.bindSocket(raw)
             raw.connect(InetSocketAddress(endpoint.host, endpoint.port), 10_000)
             raw.soTimeout = 15_000
             raw.tcpNoDelay = true

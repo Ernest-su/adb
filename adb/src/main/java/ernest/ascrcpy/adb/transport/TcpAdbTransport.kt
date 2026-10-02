@@ -1,5 +1,6 @@
 package ernest.ascrcpy.adb.transport
 
+import android.net.Network
 import java.io.EOFException
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -10,12 +11,14 @@ class TcpAdbTransport(
     private val host: String,
     private val port: Int,
     private val connectTimeoutMillis: Int = 10_000,
+    private val network: Network? = null,
 ) : AdbTransport {
     private var socket: Socket? = null
 
     override suspend fun connect() = withContext(Dispatchers.IO) {
         check(socket == null) { "Transport is already connected" }
         socket = Socket().apply {
+            network?.bindSocket(this)
             tcpNoDelay = true
             keepAlive = true
             connect(InetSocketAddress(host, this@TcpAdbTransport.port), connectTimeoutMillis)
