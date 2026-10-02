@@ -31,7 +31,7 @@ try {
 
 ### Android 11+ Wireless debugging
 
-Enable **Wireless debugging** on the target device. In **Pair device with pairing code**, note the temporary pairing address/port and six-digit code. Pair once, then use the **separate connection port** shown on the main Wireless debugging screen. These ports may change when the setting is toggled. This library currently accepts explicit addresses and ports; it does not discover them with mDNS.
+Enable **Wireless debugging** on the target device. In **Pair device with pairing code**, note the temporary pairing address/port and six-digit code. Pair once, then use the **separate connection port** shown on the main Wireless debugging screen. These ports may change when the setting is toggled. The library accepts explicit addresses and ports; the demo app additionally discovers services with Android NSD for QR pairing.
 
 ```kotlin
 val client = DefaultAdbClient.factory(applicationContext).create()
@@ -65,7 +65,7 @@ try {
 
 ## Demo
 
-Run `./gradlew :app:assembleDebug --no-daemon` and install `app/build/outputs/apk/debug/app-debug.apk` on an Android device. The demo offers TCP, wireless pairing/connection, and USB Host buttons. The **Read device model** button runs `getprop ro.product.model` through the library and displays its output.
+Run `./gradlew :app:assembleDebug --no-daemon` and install `app/build/outputs/apk/debug/app-debug.apk` on an Android device. The demo offers TCP, wireless pairing/connection, QR pairing, and USB Host buttons. For QR pairing, tap **Pair with QR code** in the demo, then scan the displayed code from **Wireless debugging → Pair device with QR code** on another Android device on the same Wi-Fi network. The demo discovers the temporary pairing service, pairs, and connects to the wireless ADB service automatically. The **Read device model** button runs `getprop ro.product.model` through the library and displays its output.
 
 ## Verify and release
 

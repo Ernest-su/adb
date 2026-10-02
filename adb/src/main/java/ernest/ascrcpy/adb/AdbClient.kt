@@ -59,7 +59,7 @@ interface AdbClient : Closeable {
     suspend fun connectUsb(device: UsbDevice): AdbDevice =
         throw UnsupportedOperationException("USB transport is unavailable")
 
-    /** Pair with the temporary pairing port and six-digit code shown by Wireless debugging. */
+    /** Pair with the temporary pairing port using a displayed code or QR password. */
     suspend fun pairWireless(pairingEndpoint: AdbEndpoint, code: String): String =
         throw UnsupportedOperationException("Wireless pairing is unavailable")
 

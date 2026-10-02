@@ -1,6 +1,7 @@
 package ernest.ascrcpy.adb.demo
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -13,6 +14,7 @@ import android.os.Bundle
 import android.view.WindowInsets
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -23,10 +25,13 @@ import ernest.ascrcpy.adb.transport.UsbAdbTransport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.channels.Channel
 
 class MainActivity : Activity() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -40,12 +45,16 @@ class MainActivity : Activity() {
     private lateinit var pairingCodeInput: EditText
     private lateinit var connectButton: Button
     private lateinit var pairButton: Button
+    private lateinit var qrPairButton: Button
     private lateinit var wirelessButton: Button
     private lateinit var usbButton: Button
     private lateinit var shellButton: Button
     private lateinit var disconnectButton: Button
     private lateinit var statusView: TextView
     private lateinit var outputView: TextView
+    private var qrDialog: AlertDialog? = null
+    private var qrDiscovery: QrPairingDiscovery? = null
+    private var qrJob: Job? = null
     private val usbManager by lazy { getSystemService(Context.USB_SERVICE) as UsbManager }
     private val usbPermissionAction by lazy { "$packageName.USB_PERMISSION" }
     private val usbReceiver = object : BroadcastReceiver() {
@@ -126,12 +135,14 @@ class MainActivity : Activity() {
 
         connectButton = Button(this).apply { text = "Connect" }
         pairButton = Button(this).apply { text = "Pair wireless" }
+        qrPairButton = Button(this).apply { text = "Pair with QR code" }
         wirelessButton = Button(this).apply { text = "Connect wireless" }
         usbButton = Button(this).apply { text = "Connect USB" }
         shellButton = Button(this).apply { text = "Read device model" }
         disconnectButton = Button(this).apply { text = "Disconnect" }
         content.addView(connectButton)
         content.addView(pairButton)
+        content.addView(qrPairButton)
         content.addView(wirelessButton)
         content.addView(usbButton)
         content.addView(shellButton)
@@ -146,6 +157,7 @@ class MainActivity : Activity() {
 
         connectButton.setOnClickListener { connect() }
         pairButton.setOnClickListener { pairWireless() }
+        qrPairButton.setOnClickListener { pairWithQrCode() }
         wirelessButton.setOnClickListener { connectWireless() }
         usbButton.setOnClickListener { selectUsb() }
         shellButton.setOnClickListener { readDeviceModel() }
@@ -201,6 +213,105 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun pairWithQrCode() {
+        if (busy || qrDialog != null) return
+        val qr = QrPairing(this)
+        val image = ImageView(this).apply {
+            setImageBitmap(qr.bitmap())
+            adjustViewBounds = true
+            setPadding(16.dp, 8.dp, 16.dp, 8.dp)
+            contentDescription = "Wireless debugging pairing QR code"
+        }
+        val instructions = TextView(this).apply {
+            text = "On the other Android device: Developer options → Wireless debugging → Pair device with QR code. Keep both devices on the same Wi-Fi network."
+            setPadding(24.dp, 16.dp, 24.dp, 8.dp)
+        }
+        val dialogContent = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(instructions)
+            addView(image)
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Pair wireless debugging")
+            .setView(dialogContent)
+            .setNegativeButton("Cancel", null)
+            .create()
+        qrDialog = dialog
+        dialog.setOnDismissListener { stopQrPairing() }
+        dialog.show()
+
+        val connections = Channel<QrPairingDiscovery.ResolvedService>(Channel.UNLIMITED)
+        var pairingStarted = false
+        val discovery = QrPairingDiscovery(
+            this, qr.serviceName,
+            onPairing = { service ->
+                if (!pairingStarted) {
+                    pairingStarted = true
+                    qrJob = launchAction {
+                        try {
+                            showStatus("QR scanned. Pairing with ${service.host}:${service.port}")
+                            val guid = withContext(Dispatchers.IO) {
+                                val pairingClient = DefaultAdbClient.factory(applicationContext).create()
+                                try { pairingClient.pairWireless(AdbEndpoint(service.host, service.port), qr.password) }
+                                finally { pairingClient.close() }
+                            }
+                            showStatus("Paired ($guid). Finding the wireless connection...")
+                            val connection = withTimeoutOrNull(30_000) {
+                                while (true) {
+                                    val candidate = connections.receive()
+                                    if (candidate.name.contains(guid, ignoreCase = true) || candidate.host == service.host) {
+                                        return@withTimeoutOrNull candidate
+                                    }
+                                }
+                                @Suppress("UNREACHABLE_CODE")
+                                null
+                            }
+                            if (connection == null) {
+                                hostInput.setText(service.host)
+                                showStatus("Paired ($guid). Connection service not found; enter the connection port shown on the device.")
+                            } else {
+                                val endpoint = AdbEndpoint(connection.host, connection.port)
+                                withContext(Dispatchers.IO) {
+                                    client?.close()
+                                    client = DefaultAdbClient.factory(applicationContext).create()
+                                    client!!.connectWireless(endpoint)
+                                }
+                                connected = true
+                                hostInput.setText(connection.host)
+                                portInput.setText(connection.port.toString())
+                                showStatus("Paired and connected to ${endpoint.serial}")
+                            }
+                        } finally {
+                            qrJob = null
+                            dialog.dismiss()
+                        }
+                    }
+                }
+            },
+            onConnection = { connections.trySend(it) },
+            onError = { message ->
+                showStatus(message)
+                dialog.dismiss()
+            },
+        )
+        qrDiscovery = discovery
+        try {
+            discovery.start()
+            showStatus("Waiting for the other device to scan the QR code")
+        } catch (error: Exception) {
+            showStatus(error.message ?: "Could not start network discovery")
+            dialog.dismiss()
+        }
+    }
+
+    private fun stopQrPairing() {
+        qrJob?.cancel()
+        qrJob = null
+        qrDiscovery?.stop()
+        qrDiscovery = null
+        qrDialog = null
+    }
+
     private fun selectUsb() {
         val devices = UsbAdbTransport.discover(usbManager)
         if (devices.isEmpty()) {
@@ -244,11 +355,11 @@ class MainActivity : Activity() {
         showStatus("Disconnected")
     }
 
-    private fun launchAction(action: suspend () -> Unit) {
-        if (busy) return
+    private fun launchAction(action: suspend () -> Unit): Job? {
+        if (busy) return null
         busy = true
         updateButtons()
-        scope.launch {
+        return scope.launch {
             try {
                 action()
             } catch (error: CancellationException) {
@@ -270,6 +381,7 @@ class MainActivity : Activity() {
     private fun updateButtons() {
         connectButton.isEnabled = !busy
         pairButton.isEnabled = !busy
+        qrPairButton.isEnabled = !busy
         wirelessButton.isEnabled = !busy
         usbButton.isEnabled = !busy
         shellButton.isEnabled = connected && !busy
@@ -277,6 +389,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        stopQrPairing()
         unregisterReceiver(usbReceiver)
         scope.cancel()
         client?.close()

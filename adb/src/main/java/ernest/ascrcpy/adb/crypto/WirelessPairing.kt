@@ -20,11 +20,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.conscrypt.Conscrypt
 
-/** AOSP wireless pairing code protocol; the returned GUID identifies the paired device. */
+/** AOSP wireless pairing protocol; the returned GUID identifies the paired device. */
 internal class WirelessPairing(private val keys: AdbTlsKeyProvider) {
     suspend fun pair(endpoint: AdbEndpoint, code: String): String = withContext(Dispatchers.IO) {
         require(!endpoint.usb) { "Pairing requires a network endpoint" }
-        require(code.matches(Regex("[0-9]{6}"))) { "Pairing code must contain six digits" }
+        require(code.isNotEmpty()) { "Pairing password must not be empty" }
         val raw = Socket()
         try {
             raw.connect(InetSocketAddress(endpoint.host, endpoint.port), 10_000)

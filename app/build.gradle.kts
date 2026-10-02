@@ -27,4 +27,5 @@ kotlin {
 dependencies {
     implementation(project(":adb"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("com.google.zxing:core:3.5.4")
 }
