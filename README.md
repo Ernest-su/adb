@@ -75,7 +75,7 @@ try {
 
 ## Demo
 
-Run `./gradlew :app:assembleDebug --no-daemon` and install `app/build/outputs/apk/debug/app-debug.apk` on an Android device. The demo offers TCP, wireless pairing/connection, QR pairing, and USB Host buttons. For QR pairing, tap **Pair with QR code** in the demo, then scan the displayed code from **Wireless debugging → Pair device with QR code** on another Android device on the same Wi-Fi network. The demo discovers the temporary pairing service, pairs, and connects to the wireless ADB service automatically. The **Read device model** button runs `getprop ro.product.model` through the library and displays its output.
+Run `./gradlew :app:assembleDebug --no-daemon` and install `app/build/outputs/apk/debug/app-debug.apk` on an Android device. Select TCP ADB, wireless debugging with a pairing code, wireless debugging with a QR code, or USB Host to see the inputs for that method. Pairing and connection addresses are separate in pairing-code mode. For QR pairing, tap **Show pairing QR code** in the demo, then scan the displayed code from **Wireless debugging → Pair device with QR code** on another Android device on the same Wi-Fi network. The demo discovers the temporary pairing service, pairs, and connects to the wireless ADB service automatically. The interface and activity log follow the device language in English or Chinese. The **Read device model** button runs `getprop ro.product.model` through the library and displays its output.
 
 ## Verify and release
 

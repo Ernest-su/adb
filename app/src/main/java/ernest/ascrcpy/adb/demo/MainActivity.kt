@@ -11,50 +11,68 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
+import android.text.InputType
+import android.view.View
 import android.view.WindowInsets
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import ernest.ascrcpy.adb.AdbClient
 import ernest.ascrcpy.adb.AdbEndpoint
 import ernest.ascrcpy.adb.DefaultAdbClient
 import ernest.ascrcpy.adb.transport.UsbAdbTransport
+import java.text.DateFormat
+import java.util.Date
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 class MainActivity : Activity() {
+    private enum class Mode(val title: Int) {
+        TCP(R.string.method_tcp),
+        WIRELESS_CODE(R.string.method_wireless_code),
+        WIRELESS_QR(R.string.method_wireless_qr),
+        USB(R.string.method_usb),
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var client: AdbClient? = null
     private var connected = false
     private var busy = false
+    private var selectedMode = Mode.TCP
+    private val panels = mutableMapOf<Mode, LinearLayout>()
+    private val modeButtons = mutableMapOf<Mode, RadioButton>()
+    private val actionButtons = mutableListOf<Button>()
+    private val logLines = ArrayDeque<String>()
 
-    private lateinit var hostInput: EditText
-    private lateinit var portInput: EditText
+    private lateinit var tcpHostInput: EditText
+    private lateinit var tcpPortInput: EditText
+    private lateinit var pairingHostInput: EditText
     private lateinit var pairingPortInput: EditText
     private lateinit var pairingCodeInput: EditText
-    private lateinit var connectButton: Button
-    private lateinit var pairButton: Button
-    private lateinit var qrPairButton: Button
-    private lateinit var wirelessButton: Button
-    private lateinit var usbButton: Button
+    private lateinit var wirelessHostInput: EditText
+    private lateinit var wirelessPortInput: EditText
     private lateinit var shellButton: Button
     private lateinit var disconnectButton: Button
     private lateinit var statusView: TextView
     private lateinit var outputView: TextView
+    private lateinit var logView: TextView
     private var qrDialog: AlertDialog? = null
     private var qrDiscovery: QrPairingDiscovery? = null
     private var qrJob: Job? = null
+
     private val usbManager by lazy { getSystemService(Context.USB_SERVICE) as UsbManager }
     private val usbPermissionAction by lazy { "$packageName.USB_PERMISSION" }
     private val usbReceiver = object : BroadcastReceiver() {
@@ -64,13 +82,12 @@ class MainActivity : Activity() {
             val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
             if (device != null && intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
                 connectUsb(device)
-            } else showStatus("USB permission denied")
+            } else showStatus(R.string.status_usb_denied)
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(24.dp, 24.dp, 24.dp, 24.dp)
@@ -78,18 +95,16 @@ class MainActivity : Activity() {
         val scroll = ScrollView(this).apply {
             addView(content)
             setOnApplyWindowInsetsListener { view, insets ->
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    val bars = insets.getInsets(WindowInsets.Type.systemBars())
-                    view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+                val bars = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    insets.getInsets(WindowInsets.Type.systemBars())
                 } else {
                     @Suppress("DEPRECATION")
-                    view.setPadding(
-                        insets.systemWindowInsetLeft,
-                        insets.systemWindowInsetTop,
-                        insets.systemWindowInsetRight,
-                        insets.systemWindowInsetBottom,
-                    )
+                    return@setOnApplyWindowInsetsListener insets.also {
+                        view.setPadding(it.systemWindowInsetLeft, it.systemWindowInsetTop,
+                            it.systemWindowInsetRight, it.systemWindowInsetBottom)
+                    }
                 }
+                view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
                 insets
             }
         }
@@ -101,142 +116,201 @@ class MainActivity : Activity() {
             registerReceiver(usbReceiver, IntentFilter(usbPermissionAction))
         }
 
-        content.addView(TextView(this).apply {
-            text = "Connect with TCP ADB, Android 11+ Wireless debugging, or USB"
-            textSize = 18f
-        })
-        hostInput = EditText(this).apply {
-            hint = "Device IP address or host"
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or
-                android.text.InputType.TYPE_TEXT_VARIATION_URI
-            setSingleLine()
+        content.addView(heading(R.string.connection_method))
+        val modeGroup = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
+        Mode.entries.forEach { mode ->
+            val button = RadioButton(this).apply {
+                id = View.generateViewId()
+                setText(mode.title)
+            }
+            modeButtons[mode] = button
+            modeGroup.addView(button)
         }
-        content.addView(hostInput)
-        portInput = EditText(this).apply {
-            hint = "Port"
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
-            setText(AdbEndpoint.DEFAULT_ADB_PORT.toString())
-            setSingleLine()
+        content.addView(modeGroup)
+        buildTcpPanel(content)
+        buildWirelessCodePanel(content)
+        buildQrPanel(content)
+        buildUsbPanel(content)
+        modeGroup.setOnCheckedChangeListener { _, checkedId ->
+            val mode = modeButtons.entries.firstOrNull { it.value.id == checkedId }?.key
+            if (mode != null) showMode(mode)
         }
-        content.addView(portInput)
+        val restored = savedInstanceState?.getString(STATE_MODE)
+            ?.let { name -> Mode.entries.firstOrNull { it.name == name } } ?: Mode.TCP
+        modeButtons.getValue(restored).isChecked = true
 
-        pairingPortInput = EditText(this).apply {
-            hint = "Wireless pairing port (different from connection port)"
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
-            setSingleLine()
-        }
-        content.addView(pairingPortInput)
-        pairingCodeInput = EditText(this).apply {
-            hint = "Six-digit pairing code"
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
-            setSingleLine()
-        }
-        content.addView(pairingCodeInput)
-
-        connectButton = Button(this).apply { text = "Connect" }
-        pairButton = Button(this).apply { text = "Pair wireless" }
-        qrPairButton = Button(this).apply { text = "Pair with QR code" }
-        wirelessButton = Button(this).apply { text = "Connect wireless" }
-        usbButton = Button(this).apply { text = "Connect USB" }
-        shellButton = Button(this).apply { text = "Read device model" }
-        disconnectButton = Button(this).apply { text = "Disconnect" }
-        content.addView(connectButton)
-        content.addView(pairButton)
-        content.addView(qrPairButton)
-        content.addView(wirelessButton)
-        content.addView(usbButton)
+        content.addView(heading(R.string.device_actions))
+        shellButton = button(R.string.read_model) { readDeviceModel() }
+        disconnectButton = button(R.string.disconnect) { disconnect() }
         content.addView(shellButton)
         content.addView(disconnectButton)
-
         statusView = TextView(this).apply { textSize = 16f }
-        outputView = TextView(this).apply { textSize = 16f }
         content.addView(statusView)
+        content.addView(heading(R.string.model_output))
+        outputView = TextView(this).apply { textSize = 16f; setTextIsSelectable(true) }
         content.addView(outputView)
-        showStatus("Disconnected")
+        content.addView(heading(R.string.activity_log))
+        content.addView(button(R.string.clear_log) {
+            logLines.clear()
+            logView.text = ""
+        })
+        logView = TextView(this).apply { textSize = 13f; setTextIsSelectable(true) }
+        content.addView(logView)
+        showStatus(R.string.status_disconnected)
         updateButtons()
-
-        connectButton.setOnClickListener { connect() }
-        pairButton.setOnClickListener { pairWireless() }
-        qrPairButton.setOnClickListener { pairWithQrCode() }
-        wirelessButton.setOnClickListener { connectWireless() }
-        usbButton.setOnClickListener { selectUsb() }
-        shellButton.setOnClickListener { readDeviceModel() }
-        disconnectButton.setOnClickListener { disconnect() }
     }
 
-    private fun connect() {
-        connectWith(wireless = false)
-    }
-
-    private fun connectWireless() {
-        connectWith(wireless = true)
-    }
-
-    private fun connectWith(wireless: Boolean) {
-        val host = hostInput.text.toString().trim()
-        val port = portInput.text.toString().toIntOrNull()
-        if (host.isEmpty() || port == null || port !in 1..65535) {
-            showStatus("Enter a device host and a port from 1 to 65535")
-            return
+    private fun buildTcpPanel(parent: LinearLayout) {
+        val panel = panel(parent, Mode.TCP)
+        panel.addView(description(R.string.tcp_description))
+        tcpHostInput = field(R.string.host_hint, false)
+        tcpPortInput = field(R.string.port_hint, true).apply {
+            setText(AdbEndpoint.DEFAULT_ADB_PORT.toString())
         }
-        val endpoint = AdbEndpoint(host, port)
+        panel.addView(tcpHostInput)
+        panel.addView(tcpPortInput)
+        panel.addView(button(R.string.connect_tcp) { connectWith(tcpHostInput, tcpPortInput, false) })
+    }
+
+    private fun buildWirelessCodePanel(parent: LinearLayout) {
+        val panel = panel(parent, Mode.WIRELESS_CODE)
+        panel.addView(description(R.string.pairing_description))
+        panel.addView(heading(R.string.pairing_details))
+        pairingHostInput = field(R.string.pairing_host_hint, false)
+        pairingPortInput = field(R.string.pairing_port_hint, true)
+        pairingCodeInput = field(R.string.pairing_code_hint, true)
+        panel.addView(pairingHostInput)
+        panel.addView(pairingPortInput)
+        panel.addView(pairingCodeInput)
+        panel.addView(button(R.string.pair_wireless) { pairWireless() })
+        panel.addView(heading(R.string.connection_details))
+        wirelessHostInput = field(R.string.wireless_host_hint, false)
+        wirelessPortInput = field(R.string.wireless_port_hint, true)
+        panel.addView(wirelessHostInput)
+        panel.addView(wirelessPortInput)
+        panel.addView(button(R.string.connect_wireless) {
+            connectWith(wirelessHostInput, wirelessPortInput, true)
+        })
+    }
+
+    private fun buildQrPanel(parent: LinearLayout) {
+        val panel = panel(parent, Mode.WIRELESS_QR)
+        panel.addView(description(R.string.qr_description))
+        panel.addView(button(R.string.pair_qr) { pairWithQrCode() })
+    }
+
+    private fun buildUsbPanel(parent: LinearLayout) {
+        val panel = panel(parent, Mode.USB)
+        panel.addView(description(R.string.usb_description))
+        panel.addView(button(R.string.connect_usb) { selectUsb() })
+    }
+
+    private fun panel(parent: LinearLayout, mode: Mode) = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        panels[mode] = this
+        parent.addView(this)
+    }
+
+    private fun showMode(mode: Mode) {
+        selectedMode = mode
+        panels.forEach { (key, panel) -> panel.visibility = if (key == mode) View.VISIBLE else View.GONE }
+    }
+
+    private fun heading(title: Int) = TextView(this).apply {
+        setText(title)
+        textSize = 18f
+        setPadding(0, 16.dp, 0, 4.dp)
+    }
+
+    private fun description(text: Int) = TextView(this).apply {
+        setText(text)
+        textSize = 14f
+        setPadding(0, 8.dp, 0, 8.dp)
+    }
+
+    private fun field(hint: Int, numeric: Boolean) = EditText(this).apply {
+        setHint(hint)
+        inputType = if (numeric) InputType.TYPE_CLASS_NUMBER else
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+        setSingleLine()
+    }
+
+    private fun button(label: Int, action: () -> Unit) = Button(this).apply {
+        setText(label)
+        setOnClickListener { action() }
+        if (label != R.string.clear_log) actionButtons.add(this)
+    }
+
+    private fun connectWith(hostInput: EditText, portInput: EditText, wireless: Boolean) {
+        val endpoint = endpoint(hostInput, portInput) ?: return
         launchAction {
-            showStatus("Connecting to ${endpoint.serial}")
+            showStatus(R.string.status_connecting, endpoint.serial)
             outputView.text = ""
+            connected = false
             withContext(Dispatchers.IO) {
                 client?.close()
                 client = DefaultAdbClient.factory(applicationContext).create()
                 if (wireless) client!!.connectWireless(endpoint) else client!!.connect(endpoint)
             }
             connected = true
-            showStatus("Connected to ${endpoint.serial}")
+            showStatus(R.string.status_connected, endpoint.serial)
         }
     }
 
-    private fun pairWireless() {
+    private fun endpoint(hostInput: EditText, portInput: EditText): AdbEndpoint? {
         val host = hostInput.text.toString().trim()
+        val port = portInput.text.toString().toIntOrNull()
+        if (host.isEmpty() || port == null || port !in 1..65535) {
+            showStatus(R.string.status_invalid_endpoint)
+            return null
+        }
+        return AdbEndpoint(host, port)
+    }
+
+    private fun pairWireless() {
+        val host = pairingHostInput.text.toString().trim()
         val port = pairingPortInput.text.toString().toIntOrNull()
         val code = pairingCodeInput.text.toString().trim()
         if (host.isEmpty() || port == null || port !in 1..65535 || !code.matches(Regex("[0-9]{6}"))) {
-            showStatus("Enter host, wireless pairing port, and six-digit code")
+            showStatus(R.string.status_invalid_pairing)
             return
         }
         launchAction {
-            showStatus("Pairing with $host:$port")
+            showStatus(R.string.status_pairing, "$host:$port")
             val guid = withContext(Dispatchers.IO) {
                 val pairingClient = DefaultAdbClient.factory(applicationContext).create()
                 try { pairingClient.pairWireless(AdbEndpoint(host, port), code) }
                 finally { pairingClient.close() }
             }
             pairingCodeInput.text.clear()
-            showStatus("Paired ($guid). Enter the separate connection port, then Connect wireless.")
+            if (wirelessHostInput.text.isBlank()) wirelessHostInput.setText(host)
+            showStatus(R.string.status_paired, guid)
         }
     }
 
     private fun pairWithQrCode() {
         if (busy || qrDialog != null) return
-        val qr = QrPairing(this)
+        val qr = QrPairing()
         val image = ImageView(this).apply {
             setImageBitmap(qr.bitmap())
             adjustViewBounds = true
             setPadding(16.dp, 8.dp, 16.dp, 8.dp)
-            contentDescription = "Wireless debugging pairing QR code"
-        }
-        val instructions = TextView(this).apply {
-            text = "On the other Android device: Developer options → Wireless debugging → Pair device with QR code. Keep both devices on the same Wi-Fi network."
-            setPadding(24.dp, 16.dp, 24.dp, 8.dp)
+            contentDescription = getString(R.string.qr_image_description)
         }
         val dialogContent = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            addView(instructions)
+            addView(description(R.string.qr_description).apply {
+                setPadding(24.dp, 16.dp, 24.dp, 8.dp)
+            })
             addView(image)
         }
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Pair wireless debugging")
+            .setTitle(R.string.qr_title)
             .setView(dialogContent)
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton(R.string.cancel) { _, _ -> showStatus(R.string.status_qr_cancelled) }
             .create()
         qrDialog = dialog
+        dialog.setOnCancelListener { showStatus(R.string.status_qr_cancelled) }
         dialog.setOnDismissListener { stopQrPairing() }
         dialog.show()
 
@@ -249,13 +323,13 @@ class MainActivity : Activity() {
                     pairingStarted = true
                     qrJob = launchAction {
                         try {
-                            showStatus("QR scanned. Pairing with ${service.host}:${service.port}")
+                            showStatus(R.string.status_qr_scanned, "${service.host}:${service.port}")
                             val guid = withContext(Dispatchers.IO) {
                                 val pairingClient = DefaultAdbClient.factory(applicationContext).create()
                                 try { pairingClient.pairWireless(AdbEndpoint(service.host, service.port), qr.password) }
                                 finally { pairingClient.close() }
                             }
-                            showStatus("Paired ($guid). Finding the wireless connection...")
+                            showStatus(R.string.status_finding_connection, guid)
                             val connection = withTimeoutOrNull(30_000) {
                                 while (true) {
                                     val candidate = connections.receive()
@@ -266,20 +340,22 @@ class MainActivity : Activity() {
                                 @Suppress("UNREACHABLE_CODE")
                                 null
                             }
+                            wirelessHostInput.setText(service.host)
                             if (connection == null) {
-                                hostInput.setText(service.host)
-                                showStatus("Paired ($guid). Connection service not found; enter the connection port shown on the device.")
+                                modeButtons.getValue(Mode.WIRELESS_CODE).isChecked = true
+                                showStatus(R.string.status_connection_not_found, guid)
                             } else {
                                 val endpoint = AdbEndpoint(connection.host, connection.port)
+                                connected = false
                                 withContext(Dispatchers.IO) {
                                     client?.close()
                                     client = DefaultAdbClient.factory(applicationContext).create()
                                     client!!.connectWireless(endpoint)
                                 }
                                 connected = true
-                                hostInput.setText(connection.host)
-                                portInput.setText(connection.port.toString())
-                                showStatus("Paired and connected to ${endpoint.serial}")
+                                wirelessHostInput.setText(connection.host)
+                                wirelessPortInput.setText(connection.port.toString())
+                                showStatus(R.string.status_paired_connected, endpoint.serial)
                             }
                         } finally {
                             qrJob = null
@@ -289,17 +365,19 @@ class MainActivity : Activity() {
                 }
             },
             onConnection = { connections.trySend(it) },
-            onError = { message ->
-                showStatus(message)
+            onError = { code ->
+                showStatus(R.string.status_discovery_failed)
+                if (code != null) appendLog(getString(R.string.log_discovery_code, code))
                 dialog.dismiss()
             },
         )
         qrDiscovery = discovery
         try {
             discovery.start()
-            showStatus("Waiting for the other device to scan the QR code")
+            if (qrDialog === dialog) showStatus(R.string.status_qr_waiting)
         } catch (error: Exception) {
-            showStatus(error.message ?: "Could not start network discovery")
+            showStatus(R.string.status_discovery_failed)
+            appendLog(getString(R.string.log_error_detail, error.message ?: error.javaClass.simpleName))
             dialog.dismiss()
         }
     }
@@ -315,7 +393,7 @@ class MainActivity : Activity() {
     private fun selectUsb() {
         val devices = UsbAdbTransport.discover(usbManager)
         if (devices.isEmpty()) {
-            showStatus("No USB ADB device found. Check USB Host mode and USB debugging.")
+            showStatus(R.string.status_usb_missing)
             return
         }
         val device = devices.first()
@@ -331,28 +409,29 @@ class MainActivity : Activity() {
     }
 
     private fun connectUsb(device: UsbDevice) = launchAction {
-        showStatus("Connecting USB ${device.deviceName}")
+        showStatus(R.string.status_usb_connecting, device.deviceName)
+        connected = false
         withContext(Dispatchers.IO) {
             client?.close()
             client = DefaultAdbClient.factory(applicationContext).create()
             client!!.connectUsb(device)
         }
         connected = true
-        showStatus("Connected via USB")
+        showStatus(R.string.status_usb_connected)
     }
 
     private fun readDeviceModel() = launchAction {
         val result = withContext(Dispatchers.IO) {
             checkNotNull(client).shell("getprop ro.product.model").text()
         }
-        outputView.text = result.ifBlank { "No output" }
-        showStatus("Command completed")
+        outputView.text = result.ifBlank { getString(R.string.no_output) }
+        showStatus(R.string.status_command_complete)
     }
 
     private fun disconnect() = launchAction {
         withContext(Dispatchers.IO) { client?.disconnect() }
         connected = false
-        showStatus("Disconnected")
+        showStatus(R.string.status_disconnected)
     }
 
     private fun launchAction(action: suspend () -> Unit): Job? {
@@ -365,8 +444,8 @@ class MainActivity : Activity() {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                connected = false
-                showStatus(error.message ?: error.javaClass.simpleName)
+                showStatus(R.string.status_operation_failed)
+                appendLog(getString(R.string.log_error_detail, error.message ?: error.javaClass.simpleName))
             } finally {
                 busy = false
                 updateButtons()
@@ -374,21 +453,34 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun showStatus(message: String) {
-        statusView.text = "Status: $message"
+    private fun showStatus(message: Int, vararg args: Any) {
+        val text = getString(message, *args)
+        statusView.text = getString(R.string.status_label, text)
+        appendLog(text)
+    }
+
+    private fun appendLog(message: String) {
+        val time = DateFormat.getTimeInstance(DateFormat.MEDIUM, resources.configuration.locales[0])
+            .format(Date())
+        logLines.addLast(getString(R.string.log_entry, time, message))
+        if (logLines.size > 100) logLines.removeFirst()
+        logView.text = logLines.joinToString("\n")
     }
 
     private fun updateButtons() {
-        connectButton.isEnabled = !busy
-        pairButton.isEnabled = !busy
-        qrPairButton.isEnabled = !busy
-        wirelessButton.isEnabled = !busy
-        usbButton.isEnabled = !busy
+        actionButtons.forEach { it.isEnabled = !busy }
         shellButton.isEnabled = connected && !busy
         disconnectButton.isEnabled = connected && !busy
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putString(STATE_MODE, selectedMode.name)
+        super.onSaveInstanceState(outState)
+    }
+
     override fun onDestroy() {
+        qrDialog?.setOnDismissListener(null)
+        qrDialog?.dismiss()
         stopQrPairing()
         unregisterReceiver(usbReceiver)
         scope.cancel()
@@ -397,4 +489,8 @@ class MainActivity : Activity() {
     }
 
     private val Int.dp: Int get() = (this * resources.displayMetrics.density).toInt()
+
+    private companion object {
+        const val STATE_MODE = "connection_mode"
+    }
 }

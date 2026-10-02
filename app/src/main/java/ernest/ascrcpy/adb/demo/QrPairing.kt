@@ -13,7 +13,7 @@ import java.security.SecureRandom
 import java.util.ArrayDeque
 
 /** One QR pairing attempt. The QR secret is valid only for this discovery session. */
-internal class QrPairing(private val context: Context) {
+internal class QrPairing {
     private val alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
     private val random = SecureRandom()
     val serviceName = "studio-${randomText(10)}"
@@ -42,7 +42,7 @@ internal class QrPairingDiscovery(
     private val serviceName: String,
     private val onPairing: (ResolvedService) -> Unit,
     private val onConnection: (ResolvedService) -> Unit,
-    private val onError: (String) -> Unit,
+    private val onError: (Int?) -> Unit,
 ) {
     data class ResolvedService(val name: String, val host: String, val port: Int)
 
@@ -81,7 +81,7 @@ internal class QrPairingDiscovery(
             override fun onDiscoveryStarted(serviceType: String) = Unit
             override fun onDiscoveryStopped(serviceType: String) = Unit
             override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
-                main.post { if (active) onError("Network discovery failed ($errorCode)") }
+                main.post { if (active) onError(errorCode) }
             }
             override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) = Unit
             override fun onServiceLost(serviceInfo: NsdServiceInfo) {
@@ -103,7 +103,7 @@ internal class QrPairingDiscovery(
         try {
             nsd.discoverServices(type, NsdManager.PROTOCOL_DNS_SD, listener)
         } catch (error: Exception) {
-            if (active) onError(error.message ?: "Network discovery failed")
+            if (active) onError(null)
         }
     }
 
