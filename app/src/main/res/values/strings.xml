@@ -82,4 +82,21 @@
     <string name="qr_title">Pair wireless debugging</string>
     <string name="qr_image_description">Wireless debugging pairing QR code</string>
     <string name="cancel">Cancel</string>
+    <string name="connection_history">Recent devices</string>
+    <string name="no_connection_history">No saved devices for this connection type.</string>
+    <string name="connect_saved">Connect</string>
+    <string name="remove_history">Remove</string>
+    <string name="status_connected_short">Connected</string>
+    <string name="tab_commands">ADB commands</string>
+    <string name="tab_apps">Apps</string>
+    <string name="tab_files">Files</string>
+    <string name="command_description">Run a shell command on the connected device.</string>
+    <string name="command_hint">Shell command</string>
+    <string name="run_command">Run command</string>
+    <string name="command_output">Output</string>
+    <string name="refresh">Refresh</string>
+    <string name="app_system">System app</string>
+    <string name="app_user">Installed app</string>
+    <string name="remote_storage">REMOTE STORAGE</string>
+    <string name="file_count">%1$d items</string>
 </resources>

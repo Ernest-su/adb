@@ -82,4 +82,21 @@
     <string name="qr_title">配对无线调试</string>
     <string name="qr_image_description">无线调试配对二维码</string>
     <string name="cancel">取消</string>
+    <string name="connection_history">最近连接的设备</string>
+    <string name="no_connection_history">此连接方式暂无历史设备。</string>
+    <string name="connect_saved">连接</string>
+    <string name="remove_history">移除</string>
+    <string name="status_connected_short">已连接</string>
+    <string name="tab_commands">ADB 命令</string>
+    <string name="tab_apps">应用</string>
+    <string name="tab_files">文件</string>
+    <string name="command_description">在已连接设备上执行 Shell 命令。</string>
+    <string name="command_hint">Shell 命令</string>
+    <string name="run_command">执行命令</string>
+    <string name="command_output">输出</string>
+    <string name="refresh">刷新</string>
+    <string name="app_system">系统应用</string>
+    <string name="app_user">用户安装</string>
+    <string name="remote_storage">远程存储空间</string>
+    <string name="file_count">共 %1$d 项</string>
 </resources>

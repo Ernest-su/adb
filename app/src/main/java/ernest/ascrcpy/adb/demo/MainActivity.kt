@@ -1,35 +1,57 @@
 package ernest.ascrcpy.adb.demo
 
-import android.app.Activity
-import android.app.AlertDialog
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.net.Uri
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
-import android.text.InputType
 import android.util.Log
-import android.view.View
-import android.view.WindowInsets
-import android.widget.Button
-import android.widget.EditText
-import android.widget.ImageView
-import android.widget.LinearLayout
-import android.widget.RadioButton
-import android.widget.RadioGroup
-import android.widget.ScrollView
-import android.widget.TextView
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.navigation3.runtime.NavEntry
+import androidx.navigation3.ui.NavDisplay
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import ernest.ascrcpy.adb.AdbClient
 import ernest.ascrcpy.adb.AdbEndpoint
 import ernest.ascrcpy.adb.DefaultAdbClient
 import ernest.ascrcpy.adb.transport.UsbAdbTransport
-import java.text.DateFormat
-import java.util.Date
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -41,355 +63,229 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
-class MainActivity : Activity() {
+class MainActivity : ComponentActivity() {
+    private data object ConnectRoute
+    private data object DeviceRoute
+    private val backStack = mutableStateListOf<Any>(ConnectRoute)
     private enum class Mode(val title: Int) {
-        TCP(R.string.method_tcp),
-        WIRELESS_CODE(R.string.method_wireless_code),
-        WIRELESS_QR(R.string.method_wireless_qr),
-        USB(R.string.method_usb),
+        TCP(R.string.method_tcp), WIRELESS_CODE(R.string.method_wireless_code),
+        WIRELESS_QR(R.string.method_wireless_qr), USB(R.string.method_usb),
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private var client: AdbClient? = null
-    private var connected = false
-    private var busy = false
-    private var selectedMode = Mode.TCP
-    private val panels = mutableMapOf<Mode, LinearLayout>()
-    private val modeButtons = mutableMapOf<Mode, RadioButton>()
-    private val actionButtons = mutableListOf<Button>()
-    private val logLines = ArrayDeque<String>()
-
-    private lateinit var tcpHostInput: EditText
-    private lateinit var tcpPortInput: EditText
-    private lateinit var pairingHostInput: EditText
-    private lateinit var pairingPortInput: EditText
-    private lateinit var pairingCodeInput: EditText
-    private lateinit var shellButton: Button
-    private lateinit var appsButton: Button
-    private lateinit var filesButton: Button
-    private lateinit var disconnectButton: Button
-    private lateinit var browserPanel: LinearLayout
-    private lateinit var navigationPanel: LinearLayout
-    private lateinit var parentButton: Button
-    private lateinit var listPanel: LinearLayout
-    private lateinit var pathInput: EditText
-    private lateinit var statusView: TextView
-    private lateinit var outputView: TextView
-    private lateinit var logView: TextView
-    private var qrDialog: AlertDialog? = null
-    private var qrDiscovery: QrPairingDiscovery? = null
-    private var qrJob: Job? = null
-    private var pendingDownload: RemoteFile? = null
-    private var currentPath = "/sdcard"
-
+    private val history by lazy { ConnectionHistory(this) }
     private val usbManager by lazy { getSystemService(Context.USB_SERVICE) as UsbManager }
     private val usbPermissionAction by lazy { "$packageName.USB_PERMISSION" }
+    private var selectedMode by mutableStateOf(Mode.TCP)
+    private var tcpHost by mutableStateOf("")
+    private var tcpPort by mutableStateOf(AdbEndpoint.DEFAULT_ADB_PORT.toString())
+    private var pairingHost by mutableStateOf("")
+    private var pairingPort by mutableStateOf("")
+    private var pairingCode by mutableStateOf("")
+    private var status by mutableStateOf("")
+    private var busy by mutableStateOf(false)
+    private var historyVersion by mutableIntStateOf(0)
+    private var qrSession by mutableStateOf<QrPairing?>(null)
+    private var qrDiscovery: QrPairingDiscovery? = null
+    private var qrJob: Job? = null
+    private var pendingUsbHistory: ConnectionRecord? = null
+
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action != usbPermissionAction) return
             @Suppress("DEPRECATION")
             val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
             if (device != null && intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
-                connectUsb(device)
+                connectUsb(device, pendingUsbHistory?.kind ?: Mode.USB.name)
             } else showStatus(R.string.status_usb_denied)
+            pendingUsbHistory = null
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(24.dp, 24.dp, 24.dp, 24.dp)
+        selectedMode = savedInstanceState?.getString("mode")?.let { name ->
+            Mode.entries.firstOrNull { it.name == name }
+        } ?: Mode.TCP
+        if (savedInstanceState?.getBoolean("device_route") == true && DeviceSession.client != null) {
+            backStack.add(DeviceRoute)
         }
-        val scroll = ScrollView(this).apply {
-            addView(content)
-            setOnApplyWindowInsetsListener { view, insets ->
-                val bars = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    insets.getInsets(WindowInsets.Type.systemBars())
-                } else {
-                    @Suppress("DEPRECATION")
-                    return@setOnApplyWindowInsetsListener insets.also {
-                        view.setPadding(it.systemWindowInsetLeft, it.systemWindowInsetTop,
-                            it.systemWindowInsetRight, it.systemWindowInsetBottom)
-                    }
-                }
-                view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
-                insets
-            }
-        }
-        setContentView(scroll)
         if (Build.VERSION.SDK_INT >= 33) {
             registerReceiver(usbReceiver, IntentFilter(usbPermissionAction), Context.RECEIVER_NOT_EXPORTED)
         } else {
             @Suppress("DEPRECATION")
             registerReceiver(usbReceiver, IntentFilter(usbPermissionAction))
         }
-
-        content.addView(heading(R.string.connection_method))
-        val modeGroup = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
-        Mode.entries.forEach { mode ->
-            val button = RadioButton(this).apply {
-                id = View.generateViewId()
-                setText(mode.title)
+        status = getString(R.string.status_disconnected)
+        setContent {
+            MaterialTheme {
+                NavDisplay(backStack = backStack, onBack = ::leaveDevice,
+                    entryProvider = { key ->
+                        when (key) {
+                            ConnectRoute -> NavEntry(key) { ConnectionScreen() }
+                            DeviceRoute -> NavEntry(key) { DeviceScreen(onDisconnect = ::leaveDevice) }
+                            else -> error("Unknown route: $key")
+                        }
+                    })
             }
-            modeButtons[mode] = button
-            modeGroup.addView(button)
         }
-        content.addView(modeGroup)
-        buildTcpPanel(content)
-        buildWirelessCodePanel(content)
-        buildQrPanel(content)
-        buildUsbPanel(content)
-        modeGroup.setOnCheckedChangeListener { _, checkedId ->
-            val mode = modeButtons.entries.firstOrNull { it.value.id == checkedId }?.key
-            if (mode != null) showMode(mode)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        historyVersion++
+    }
+
+    @Composable
+    private fun ConnectionScreen() {
+        val records = remember(historyVersion, selectedMode) { history.list(selectedMode.name) }
+        Column(
+            Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(stringResource(R.string.connection_method), style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold)
+            Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Mode.entries.forEach { mode ->
+                    if (mode == selectedMode) Button(onClick = { selectedMode = mode }, enabled = !busy) {
+                        Text(stringResource(mode.title))
+                    } else OutlinedButton(onClick = { selectedMode = mode }, enabled = !busy) {
+                        Text(stringResource(mode.title))
+                    }
+                }
+            }
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    when (selectedMode) {
+                        Mode.TCP -> {
+                            Text(stringResource(R.string.tcp_description))
+                            OutlinedTextField(tcpHost, { tcpHost = it }, label = { Text(stringResource(R.string.host_hint)) },
+                                modifier = Modifier.fillMaxWidth(), singleLine = true)
+                            OutlinedTextField(tcpPort, { tcpPort = it }, label = { Text(stringResource(R.string.port_hint)) },
+                                modifier = Modifier.fillMaxWidth(), singleLine = true)
+                            Button(onClick = ::connectTcp, enabled = !busy) { Text(stringResource(R.string.connect_tcp)) }
+                        }
+                        Mode.WIRELESS_CODE -> {
+                            Text(stringResource(R.string.pairing_description))
+                            OutlinedTextField(pairingHost, { pairingHost = it },
+                                label = { Text(stringResource(R.string.pairing_host_hint)) },
+                                modifier = Modifier.fillMaxWidth(), singleLine = true)
+                            OutlinedTextField(pairingPort, { pairingPort = it },
+                                label = { Text(stringResource(R.string.pairing_port_hint)) },
+                                modifier = Modifier.fillMaxWidth(), singleLine = true)
+                            OutlinedTextField(pairingCode, { pairingCode = it },
+                                label = { Text(stringResource(R.string.pairing_code_hint)) },
+                                modifier = Modifier.fillMaxWidth(), singleLine = true,
+                                visualTransformation = PasswordVisualTransformation())
+                            Button(onClick = ::pairWireless, enabled = !busy) { Text(stringResource(R.string.pair_wireless)) }
+                        }
+                        Mode.WIRELESS_QR -> {
+                            Text(stringResource(R.string.qr_description))
+                            Button(onClick = ::pairWithQrCode, enabled = !busy) { Text(stringResource(R.string.pair_qr)) }
+                        }
+                        Mode.USB -> {
+                            Text(stringResource(R.string.usb_description))
+                            Button(onClick = ::selectUsb, enabled = !busy) { Text(stringResource(R.string.connect_usb)) }
+                        }
+                    }
+                }
+            }
+            Text(stringResource(R.string.connection_history), style = MaterialTheme.typography.titleLarge)
+            if (records.isEmpty()) Text(stringResource(R.string.no_connection_history),
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            records.forEach { record ->
+                Card(Modifier.fillMaxWidth()) {
+                    Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            Text(if (record.kind == Mode.USB.name) record.usbName else record.host,
+                                style = MaterialTheme.typography.titleMedium)
+                            Text(if (record.kind == Mode.USB.name)
+                                "USB ${record.vendorId}:${record.productId}" else "${record.host}:${record.port}",
+                                style = MaterialTheme.typography.bodySmall)
+                        }
+                        TextButton(onClick = { connectHistory(record) }, enabled = !busy) {
+                            Text(stringResource(R.string.connect_saved))
+                        }
+                        TextButton(onClick = { history.remove(record); historyVersion++ }, enabled = !busy) {
+                            Text(stringResource(R.string.remove_history))
+                        }
+                    }
+                }
+            }
         }
-        val restored = savedInstanceState?.getString(STATE_MODE)
-            ?.let { name -> Mode.entries.firstOrNull { it.name == name } } ?: Mode.TCP
-        modeButtons.getValue(restored).isChecked = true
-
-        content.addView(heading(R.string.device_actions))
-        shellButton = button(R.string.read_model) { readDeviceModel() }
-        appsButton = button(R.string.show_apps) { showApplications() }
-        filesButton = button(R.string.browse_files) { openBrowser() }
-        disconnectButton = button(R.string.disconnect) { disconnect() }
-        content.addView(shellButton)
-        content.addView(appsButton)
-        content.addView(filesButton)
-        content.addView(disconnectButton)
-        browserPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
-        content.addView(browserPanel)
-        navigationPanel = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        pathInput = field(R.string.remote_path_hint, false).apply {
-            setText(currentPath)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        qrSession?.let { qr ->
+            val qrImage = remember(qr) { qr.bitmap().asImageBitmap() }
+            AlertDialog(onDismissRequest = ::stopQrPairing,
+                title = { Text(stringResource(R.string.qr_title)) },
+                text = { Column { Text(stringResource(R.string.qr_description)); Spacer(Modifier.height(12.dp));
+                    Image(qrImage, contentDescription = stringResource(R.string.qr_image_description),
+                        modifier = Modifier.fillMaxWidth()) } },
+                confirmButton = {}, dismissButton = {
+                    TextButton(onClick = ::stopQrPairing) { Text(stringResource(R.string.cancel)) }
+                })
         }
-        navigationPanel.addView(pathInput)
-        navigationPanel.addView(button(R.string.go_to_path) { loadFiles(pathInput.text.toString()) })
-        browserPanel.addView(navigationPanel)
-        parentButton = button(R.string.parent_folder) { loadFiles(DeviceManager.parent(currentPath)) }
-        browserPanel.addView(parentButton)
-        listPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        browserPanel.addView(listPanel)
-        statusView = TextView(this).apply { textSize = 16f }
-        content.addView(statusView)
-        content.addView(heading(R.string.model_output))
-        outputView = TextView(this).apply { textSize = 16f; setTextIsSelectable(true) }
-        content.addView(outputView)
-        content.addView(heading(R.string.activity_log))
-        content.addView(button(R.string.clear_log) {
-            logLines.clear()
-            logView.text = ""
-        })
-        logView = TextView(this).apply { textSize = 13f; setTextIsSelectable(true) }
-        content.addView(logView)
-        showStatus(R.string.status_disconnected)
-        updateButtons()
-    }
-
-    private fun buildTcpPanel(parent: LinearLayout) {
-        val panel = panel(parent, Mode.TCP)
-        panel.addView(description(R.string.tcp_description))
-        tcpHostInput = field(R.string.host_hint, false)
-        tcpPortInput = field(R.string.port_hint, true).apply {
-            setText(AdbEndpoint.DEFAULT_ADB_PORT.toString())
-        }
-        panel.addView(tcpHostInput)
-        panel.addView(tcpPortInput)
-        panel.addView(button(R.string.connect_tcp) { connectTcp() })
-    }
-
-    private fun buildWirelessCodePanel(parent: LinearLayout) {
-        val panel = panel(parent, Mode.WIRELESS_CODE)
-        panel.addView(description(R.string.pairing_description))
-        panel.addView(heading(R.string.pairing_details))
-        pairingHostInput = field(R.string.pairing_host_hint, false)
-        pairingPortInput = field(R.string.pairing_port_hint, true)
-        pairingCodeInput = field(R.string.pairing_code_hint, true)
-        panel.addView(pairingHostInput)
-        panel.addView(pairingPortInput)
-        panel.addView(pairingCodeInput)
-        panel.addView(button(R.string.pair_wireless) { pairWireless() })
-    }
-
-    private fun buildQrPanel(parent: LinearLayout) {
-        val panel = panel(parent, Mode.WIRELESS_QR)
-        panel.addView(description(R.string.qr_description))
-        panel.addView(button(R.string.pair_qr) { pairWithQrCode() })
-    }
-
-    private fun buildUsbPanel(parent: LinearLayout) {
-        val panel = panel(parent, Mode.USB)
-        panel.addView(description(R.string.usb_description))
-        panel.addView(button(R.string.connect_usb) { selectUsb() })
-    }
-
-    private fun panel(parent: LinearLayout, mode: Mode) = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        panels[mode] = this
-        parent.addView(this)
-    }
-
-    private fun showMode(mode: Mode) {
-        selectedMode = mode
-        panels.forEach { (key, panel) -> panel.visibility = if (key == mode) View.VISIBLE else View.GONE }
-    }
-
-    private fun heading(title: Int) = TextView(this).apply {
-        setText(title)
-        textSize = 18f
-        setPadding(0, 16.dp, 0, 4.dp)
-    }
-
-    private fun description(text: Int) = TextView(this).apply {
-        setText(text)
-        textSize = 14f
-        setPadding(0, 8.dp, 0, 8.dp)
-    }
-
-    private fun field(hint: Int, numeric: Boolean) = EditText(this).apply {
-        setHint(hint)
-        inputType = if (numeric) InputType.TYPE_CLASS_NUMBER else
-            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-        setSingleLine()
-    }
-
-    private fun button(label: Int, track: Boolean = true, action: () -> Unit) = Button(this).apply {
-        setText(label)
-        setOnClickListener { action() }
-        if (track && label != R.string.clear_log) actionButtons.add(this)
     }
 
     private fun connectTcp() {
-        val endpoint = endpoint(tcpHostInput, tcpPortInput) ?: return
+        val port = tcpPort.toIntOrNull()
+        if (tcpHost.isBlank() || port == null || port !in 1..65535) {
+            showStatus(R.string.status_invalid_endpoint); return
+        }
+        val endpoint = AdbEndpoint(tcpHost.trim(), port)
         launchAction {
             showStatus(R.string.status_connecting, endpoint.serial)
-            outputView.text = ""
-            connected = false
-            clearBrowser()
-            withContext(Dispatchers.IO) {
-                client?.close()
-                client = DefaultAdbClient.factory(applicationContext).create()
-                client!!.connect(endpoint)
-            }
-            connected = true
-            showStatus(R.string.status_connected, endpoint.serial)
+            connectAndOpen(ConnectionRecord(Mode.TCP.name, endpoint.host, endpoint.port)) { connect(endpoint) }
         }
-    }
-
-    private fun endpoint(hostInput: EditText, portInput: EditText): AdbEndpoint? {
-        val host = hostInput.text.toString().trim()
-        val port = portInput.text.toString().toIntOrNull()
-        if (host.isEmpty() || port == null || port !in 1..65535) {
-            showStatus(R.string.status_invalid_endpoint)
-            return null
-        }
-        return AdbEndpoint(host, port)
     }
 
     private fun pairWireless() {
-        val host = pairingHostInput.text.toString().trim()
-        val port = pairingPortInput.text.toString().toIntOrNull()
-        val code = pairingCodeInput.text.toString().trim()
+        val host = pairingHost.trim()
+        val port = pairingPort.toIntOrNull()
+        val code = pairingCode.trim()
         if (host.isEmpty() || port == null || port !in 1..65535 || !code.matches(Regex("[0-9]{6}"))) {
-            showStatus(R.string.status_invalid_pairing)
-            return
+            showStatus(R.string.status_invalid_pairing); return
         }
         launchAction {
-            val connections = Channel<QrPairingDiscovery.ResolvedService>(Channel.UNLIMITED)
-            val discovery = QrPairingDiscovery(
-                this@MainActivity,
-                serviceName = null,
-                onPairing = { },
-                onConnection = { connections.trySend(it) },
-                onError = { errorCode ->
-                    if (errorCode != null) appendLog(getString(R.string.log_discovery_code, errorCode))
-                },
-            )
-            try {
-                discovery.start()
-                showStatus(R.string.status_pairing, "$host:$port")
-                val guid = withContext(Dispatchers.IO) {
-                    val pairingClient = DefaultAdbClient.factory(applicationContext).create()
+            showStatus(R.string.status_pairing, "$host:$port")
+            val guid = withContext(Dispatchers.IO) {
+                DefaultAdbClient.factory(applicationContext).create().let { pairingClient ->
                     try { pairingClient.pairWireless(AdbEndpoint(host, port), code) }
                     finally { pairingClient.close() }
                 }
-                pairingCodeInput.text.clear()
-                showStatus(R.string.status_finding_connection, guid)
-                val connection = withTimeoutOrNull(30_000) {
-                    while (true) {
-                        val candidate = connections.receive()
-                        if (candidate.name.contains(guid, ignoreCase = true)) {
-                            return@withTimeoutOrNull candidate
-                        }
-                    }
-                    @Suppress("UNREACHABLE_CODE")
-                    null
+            }
+            pairingCode = ""
+            showStatus(R.string.status_finding_connection, guid)
+            val service = discoverConnection(guid, 30_000)
+            if (service == null) showStatus(R.string.status_connection_not_found, guid)
+            else {
+                val endpoint = AdbEndpoint(if (host.isTailscaleAddress()) host else service.host, service.port)
+                connectAndOpen(ConnectionRecord(Mode.WIRELESS_CODE.name, endpoint.host, endpoint.port, guid)) {
+                    connectWireless(endpoint)
                 }
-                if (connection == null) {
-                    showStatus(R.string.status_connection_not_found, guid)
-                } else {
-                    // An explicitly entered Tailscale address selects that route. mDNS still
-                    // supplies the short-lived connection port, but must not replace the host.
-                    val useTailscale = host.isTailscaleAddress()
-                    val endpoint = AdbEndpoint(if (useTailscale) host else connection.host, connection.port)
-                    connected = false
-                    clearBrowser()
-                    withContext(Dispatchers.IO) {
-                        client?.close()
-                        client = DefaultAdbClient.factory(applicationContext).create()
-                        client!!.connectWireless(endpoint)
-                    }
-                    connected = true
-                    showStatus(R.string.status_paired_connected, endpoint.serial)
-                }
-            } finally {
-                discovery.stop()
-                connections.close()
             }
         }
     }
 
     private fun pairWithQrCode() {
-        if (busy || qrDialog != null) return
+        if (busy || qrSession != null) return
         val qr = QrPairing()
-        val image = ImageView(this).apply {
-            setImageBitmap(qr.bitmap())
-            adjustViewBounds = true
-            setPadding(16.dp, 8.dp, 16.dp, 8.dp)
-            contentDescription = getString(R.string.qr_image_description)
-        }
-        val dialogContent = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(description(R.string.qr_description).apply {
-                setPadding(24.dp, 16.dp, 24.dp, 8.dp)
-            })
-            addView(image)
-        }
-        val dialog = AlertDialog.Builder(this)
-            .setTitle(R.string.qr_title)
-            .setView(dialogContent)
-            .setNegativeButton(R.string.cancel) { _, _ -> showStatus(R.string.status_qr_cancelled) }
-            .create()
-        qrDialog = dialog
-        dialog.setOnCancelListener { showStatus(R.string.status_qr_cancelled) }
-        dialog.setOnDismissListener { stopQrPairing() }
-        dialog.show()
-
+        qrSession = qr
         val connections = Channel<QrPairingDiscovery.ResolvedService>(Channel.UNLIMITED)
-        var pairingStarted = false
-        val discovery = QrPairingDiscovery(
-            this, qr.serviceName,
+        var started = false
+        val discovery = QrPairingDiscovery(this, qr.serviceName,
             onPairing = { service ->
-                if (!pairingStarted) {
-                    pairingStarted = true
+                if (!started) {
+                    started = true
                     qrJob = launchAction {
                         try {
                             showStatus(R.string.status_qr_scanned, "${service.host}:${service.port}")
                             val guid = withContext(Dispatchers.IO) {
-                                val pairingClient = DefaultAdbClient.factory(applicationContext).create()
-                                try { pairingClient.pairWireless(AdbEndpoint(service.host, service.port), qr.password) }
-                                finally { pairingClient.close() }
+                                DefaultAdbClient.factory(applicationContext).create().let { pairingClient ->
+                                    try { pairingClient.pairWireless(AdbEndpoint(service.host, service.port), qr.password) }
+                                    finally { pairingClient.close() }
+                                }
                             }
                             showStatus(R.string.status_finding_connection, guid)
                             val connection = withTimeoutOrNull(30_000) {
@@ -399,277 +295,149 @@ class MainActivity : Activity() {
                                         return@withTimeoutOrNull candidate
                                     }
                                 }
-                                @Suppress("UNREACHABLE_CODE")
-                                null
+                                @Suppress("UNREACHABLE_CODE") null
                             }
-                            if (connection == null) {
-                                showStatus(R.string.status_connection_not_found, guid)
-                            } else {
-                                val useTailscale = service.host.isTailscaleAddress()
-                                val endpoint = AdbEndpoint(
-                                    if (useTailscale) service.host else connection.host,
-                                    connection.port,
-                                )
-                                connected = false
-                                clearBrowser()
-                                withContext(Dispatchers.IO) {
-                                    client?.close()
-                                    client = DefaultAdbClient.factory(applicationContext).create()
-                                    client!!.connectWireless(endpoint)
+                            if (connection == null) showStatus(R.string.status_connection_not_found, guid)
+                            else {
+                                val endpoint = AdbEndpoint(connection.host, connection.port)
+                                connectAndOpen(ConnectionRecord(Mode.WIRELESS_QR.name, endpoint.host, endpoint.port, guid)) {
+                                    connectWireless(endpoint)
                                 }
-                                connected = true
-                                showStatus(R.string.status_paired_connected, endpoint.serial)
                             }
                         } finally {
-                            qrJob = null
-                            dialog.dismiss()
+                            qrDiscovery?.stop(); qrDiscovery = null
+                            qrSession = null; qrJob = null; connections.close()
                         }
                     }
                 }
-            },
-            onConnection = { connections.trySend(it) },
+            }, onConnection = { connections.trySend(it) },
             onError = { code ->
                 showStatus(R.string.status_discovery_failed)
-                if (code != null) appendLog(getString(R.string.log_discovery_code, code))
-                dialog.dismiss()
-            },
-        )
+                if (code != null) Log.e(TAG, "NSD error $code")
+                stopQrPairing()
+            })
         qrDiscovery = discovery
-        try {
-            discovery.start()
-            if (qrDialog === dialog) showStatus(R.string.status_qr_waiting)
-        } catch (error: Exception) {
-            showStatus(R.string.status_discovery_failed)
-            appendLog(getString(R.string.log_error_detail, error.message ?: error.javaClass.simpleName))
-            dialog.dismiss()
-        }
+        try { discovery.start(); showStatus(R.string.status_qr_waiting) }
+        catch (error: Exception) { stopQrPairing(); report(error) }
     }
 
     private fun stopQrPairing() {
-        qrJob?.cancel()
-        qrJob = null
-        qrDiscovery?.stop()
-        qrDiscovery = null
-        qrDialog = null
+        qrJob?.cancel(); qrJob = null
+        qrDiscovery?.stop(); qrDiscovery = null
+        qrSession = null
     }
 
-    private fun selectUsb() {
-        val devices = UsbAdbTransport.discover(usbManager)
-        if (devices.isEmpty()) {
-            showStatus(R.string.status_usb_missing)
-            return
+    private fun connectHistory(record: ConnectionRecord) {
+        when (record.kind) {
+            Mode.TCP.name -> launchAction {
+                val endpoint = AdbEndpoint(record.host, record.port)
+                showStatus(R.string.status_connecting, endpoint.serial)
+                connectAndOpen(record) { connect(endpoint) }
+            }
+            Mode.WIRELESS_CODE.name, Mode.WIRELESS_QR.name -> launchAction {
+                showStatus(R.string.status_finding_connection, record.guid)
+                val service = discoverConnection(record.guid, 10_000)
+                val endpoint = if (service != null) AdbEndpoint(
+                    if (record.host.isTailscaleAddress()) record.host else service.host, service.port)
+                else AdbEndpoint(record.host, record.port)
+                connectAndOpen(record.copy(host = endpoint.host, port = endpoint.port)) { connectWireless(endpoint) }
+            }
+            Mode.USB.name -> selectUsb(record)
         }
-        val device = devices.first()
-        if (usbManager.hasPermission(device)) {
-            connectUsb(device)
-        } else {
-            val intent = PendingIntent.getBroadcast(
-                this, 0, Intent(usbPermissionAction).setPackage(packageName),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
-            )
+    }
+
+    private suspend fun discoverConnection(guid: String, timeout: Long): QrPairingDiscovery.ResolvedService? {
+        val connections = Channel<QrPairingDiscovery.ResolvedService>(Channel.UNLIMITED)
+        val discovery = QrPairingDiscovery(this, null, {}, { connections.trySend(it) },
+            { code -> if (code != null) Log.e(TAG, "NSD error $code") })
+        return try {
+            discovery.start()
+            withTimeoutOrNull(timeout) {
+                while (true) {
+                    val service = connections.receive()
+                    if (service.name.contains(guid, ignoreCase = true)) return@withTimeoutOrNull service
+                }
+                @Suppress("UNREACHABLE_CODE") null
+            }
+        } finally { discovery.stop(); connections.close() }
+    }
+
+    private fun selectUsb(record: ConnectionRecord? = null) {
+        val devices = UsbAdbTransport.discover(usbManager)
+        val device = if (record == null) devices.firstOrNull() else
+            devices.firstOrNull { it.deviceName == record.usbName } ?:
+                devices.firstOrNull { it.vendorId == record.vendorId && it.productId == record.productId }
+        if (device == null) { showStatus(R.string.status_usb_missing); return }
+        pendingUsbHistory = record
+        if (usbManager.hasPermission(device)) connectUsb(device, record?.kind ?: Mode.USB.name)
+        else {
+            val intent = PendingIntent.getBroadcast(this, 0,
+                Intent(usbPermissionAction).setPackage(packageName),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
             usbManager.requestPermission(device, intent)
         }
     }
 
-    private fun connectUsb(device: UsbDevice) = launchAction {
+    private fun connectUsb(device: UsbDevice, kind: String) = launchAction {
         showStatus(R.string.status_usb_connecting, device.deviceName)
-        connected = false
-        clearBrowser()
-        withContext(Dispatchers.IO) {
-            client?.close()
-            client = DefaultAdbClient.factory(applicationContext).create()
-            client!!.connectUsb(device)
+        connectAndOpen(ConnectionRecord(kind, device.deviceName, vendorId = device.vendorId,
+            productId = device.productId, usbName = device.deviceName)) { connectUsb(device) }
+    }
+
+    private suspend fun connectAndOpen(record: ConnectionRecord, connect: suspend AdbClient.() -> Unit) {
+        val active = DefaultAdbClient.factory(applicationContext).create()
+        try {
+            withContext(Dispatchers.IO) { active.connect() }
+            history.save(record)
+            historyVersion++
+            DeviceSession.set(active, if (record.kind == Mode.USB.name) record.usbName else "${record.host}:${record.port}")
+            if (backStack.lastOrNull() != DeviceRoute) backStack.add(DeviceRoute)
+        } catch (error: Throwable) {
+            active.close()
+            throw error
         }
-        connected = true
-        showStatus(R.string.status_usb_connected)
-    }
-
-    private fun readDeviceModel() = launchAction {
-        val result = withContext(Dispatchers.IO) {
-            checkNotNull(client).shell("getprop ro.product.model").text()
-        }
-        outputView.text = result.ifBlank { getString(R.string.no_output) }
-        showStatus(R.string.status_command_complete)
-    }
-
-    private fun showApplications() = launchAction {
-        browserPanel.visibility = View.VISIBLE
-        navigationPanel.visibility = View.GONE
-        parentButton.visibility = View.GONE
-        listPanel.removeAllViews()
-        listPanel.addView(description(R.string.loading_apps))
-        val apps = DeviceManager(this@MainActivity, checkNotNull(client)).applications()
-        listPanel.removeAllViews()
-        listPanel.addView(heading(R.string.show_apps))
-        listPanel.addView(TextView(this@MainActivity).apply { text = getString(R.string.app_count, apps.size) })
-        apps.forEach { app ->
-            listPanel.addView(TextView(this@MainActivity).apply {
-                text = getString(if (app.system) R.string.app_system_row else R.string.app_user_row, app.packageName)
-                textSize = 15f
-                setPadding(8.dp, 7.dp, 8.dp, 7.dp)
-                setTextIsSelectable(true)
-            })
-        }
-        showStatus(R.string.status_apps_loaded, apps.size)
-    }
-
-    private fun openBrowser() {
-        browserPanel.visibility = View.VISIBLE
-        navigationPanel.visibility = View.VISIBLE
-        parentButton.visibility = View.VISIBLE
-        loadFiles(currentPath)
-    }
-
-    private fun loadFiles(path: String): Unit {
-        launchAction {
-            val normalized = DeviceManager.normalize(path.trim())
-            listPanel.removeAllViews()
-            listPanel.addView(description(R.string.loading_files))
-            val entries = DeviceManager(this@MainActivity, checkNotNull(client)).files(normalized)
-            currentPath = normalized
-            pathInput.setText(currentPath)
-            listPanel.removeAllViews()
-            listPanel.addView(heading(R.string.remote_files))
-            if (entries.isEmpty()) listPanel.addView(description(R.string.empty_folder))
-            entries.forEach { entry ->
-                val row = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
-                val type = when (entry.type) {
-                    "directory" -> getString(R.string.file_type_directory)
-                    "link" -> getString(R.string.file_type_link)
-                    "file" -> getString(R.string.file_type_file)
-                    else -> getString(R.string.file_type_other)
-                }
-                val title = if (entry.type == "file" || entry.directory) {
-                    button(if (entry.directory) R.string.open_folder else R.string.download, track = false) {
-                        if (entry.directory) loadFiles(entry.path) else chooseDownload(entry)
-                    }
-                } else TextView(this@MainActivity).apply {
-                    textSize = 16f
-                    setPadding(8.dp, 12.dp, 8.dp, 8.dp)
-                }
-                title.text = "$type  ${entry.name}"
-                row.addView(title)
-                row.addView(TextView(this@MainActivity).apply {
-                    text = getString(R.string.file_details, type, if (entry.directory) "—" else formatBytes(entry.size), formatTime(entry.modifiedSeconds))
-                    textSize = 13f
-                    setPadding(8.dp, 0, 8.dp, 4.dp)
-                })
-                if (entry.directory) row.addView(button(R.string.download_folder, track = false) { chooseDownload(entry) })
-                listPanel.addView(row)
-            }
-            showStatus(R.string.status_files_loaded, entries.size, currentPath)
-        }
-    }
-
-    private fun chooseDownload(entry: RemoteFile) {
-        if (busy) return
-        if (entry.type != "file" && entry.type != "directory") return
-        pendingDownload = entry
-        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-        }, REQUEST_DOWNLOAD_FOLDER)
-    }
-
-    @Deprecated("Uses the platform document tree picker without an additional Activity dependency")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQUEST_DOWNLOAD_FOLDER) return
-        val entry = pendingDownload
-        pendingDownload = null
-        val uri: Uri = data?.data ?: return
-        if (resultCode != RESULT_OK || entry == null) return
-        launchAction {
-            showStatus(R.string.status_downloading, entry.name)
-            DeviceManager(this@MainActivity, checkNotNull(client)).download(entry, uri) { file ->
-                runOnUiThread { statusView.text = getString(R.string.status_label, getString(R.string.status_downloading, file)) }
-            }
-            showStatus(R.string.status_download_complete, entry.name)
-        }
-    }
-
-    private fun disconnect() = launchAction {
-        withContext(Dispatchers.IO) { client?.disconnect() }
-        connected = false
-        clearBrowser()
-        showStatus(R.string.status_disconnected)
-    }
-
-    private fun clearBrowser() {
-        browserPanel.visibility = View.GONE
-        listPanel.removeAllViews()
-        pendingDownload = null
     }
 
     private fun launchAction(action: suspend () -> Unit): Job? {
         if (busy) return null
         busy = true
-        updateButtons()
         return scope.launch {
-            try {
-                action()
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                Log.e(TAG, "ADB operation failed", error)
-                showStatus(R.string.status_operation_failed)
-                appendLog(getString(R.string.log_error_detail, error.describe()))
-            } finally {
-                busy = false
-                updateButtons()
-            }
+            try { action() }
+            catch (error: CancellationException) { throw error }
+            catch (error: Exception) { report(error) }
+            finally { busy = false }
         }
     }
 
-    private fun showStatus(message: Int, vararg args: Any) {
-        val text = getString(message, *args)
-        statusView.text = getString(R.string.status_label, text)
-        appendLog(text)
+    private fun report(error: Throwable) {
+        Log.e(TAG, "ADB operation failed", error)
+        status = getString(R.string.status_operation_failed) + " " + (error.message ?: error.javaClass.simpleName)
     }
 
-    private fun appendLog(message: String) {
-        Log.i(TAG, message)
-        val time = DateFormat.getTimeInstance(DateFormat.MEDIUM, resources.configuration.locales[0])
-            .format(Date())
-        logLines.addLast(getString(R.string.log_entry, time, message))
-        if (logLines.size > 100) logLines.removeFirst()
-        logView.text = logLines.joinToString("\n")
-    }
-
-    private fun updateButtons() {
-        actionButtons.forEach { it.isEnabled = !busy }
-        shellButton.isEnabled = connected && !busy
-        appsButton.isEnabled = connected && !busy
-        filesButton.isEnabled = connected && !busy
-        disconnectButton.isEnabled = connected && !busy
-    }
+    private fun showStatus(id: Int, vararg args: Any) { status = getString(id, *args); Log.i(TAG, status) }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        outState.putString(STATE_MODE, selectedMode.name)
+        outState.putString("mode", selectedMode.name)
+        outState.putBoolean("device_route", backStack.lastOrNull() == DeviceRoute)
         super.onSaveInstanceState(outState)
     }
 
     override fun onDestroy() {
-        qrDialog?.setOnDismissListener(null)
-        qrDialog?.dismiss()
         stopQrPairing()
         unregisterReceiver(usbReceiver)
         scope.cancel()
-        client?.close()
+        if (isFinishing) DeviceSession.clear()
         super.onDestroy()
     }
 
-    private val Int.dp: Int get() = (this * resources.displayMetrics.density).toInt()
-
-    private companion object {
-        const val TAG = "AdbDemo"
-        const val STATE_MODE = "connection_mode"
-        const val REQUEST_DOWNLOAD_FOLDER = 41
+    private fun leaveDevice() {
+        DeviceSession.clear()
+        if (backStack.lastOrNull() == DeviceRoute) backStack.removeAt(backStack.lastIndex)
+        showStatus(R.string.status_disconnected)
     }
-}
 
-private fun Throwable.describe(): String = generateSequence(this) { current ->
-    current.cause?.takeUnless { it === current }
-}.map { it.message ?: it.javaClass.simpleName }.distinct().joinToString(": ")
+    private companion object { const val TAG = "AdbDemo" }
+}
 
 internal fun String.isTailscaleAddress(): Boolean {
     val normalized = trim().removePrefix("[").removeSuffix("]").lowercase()

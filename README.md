@@ -30,12 +30,18 @@ try {
 `AdbClient`, `AdbChannel`, `AdbEndpoint`, `AdbKeyProvider`, and `AdbTransport` provide the stable public boundary. The default key provider stores its RSA identity in the application's no-backup directory. The target device can require the user to authorize it on first connection. Keep remote shell commands fixed and validate user input before composing them.
 
 The demo app provides TCP, Wireless debugging, and USB connection flows. After connecting,
-**Application list** queries installed package names with the standard ADB shell service.
-**Browse files** reads file type, size, and modification time through the ADB sync `LIST` or
+the Compose UI navigates to a device page using Navigation 3. Its tabs provide ADB shell
+command testing, an application list, and a file browser. The application list queries
+installed package names with the standard ADB shell service. The file browser reads file
+type, size, and modification time through the ADB sync `LIST` or
 `LIS2` service. Tap a folder to navigate, enter a path directly, or use **Parent folder**.
 Tap a file's download button or **Download folder** and choose a local destination with
 Android's system folder picker. Downloads use ADB sync `RECV` and require no software to be
 installed on the target. Symbolic links are shown but are not followed during folder downloads.
+Successful TCP, wireless pairing code, wireless QR, and USB connections are saved in separate
+histories. Selecting a saved device starts a new connection; opening the app does not reconnect
+automatically. Pairing secrets are not saved. Wireless history uses discovery to find the current
+connection port and falls back to the previously used endpoint.
 
 Connection, authentication, shell, push, and pull diagnostics are emitted under the
 `AdbClient` logcat tag. The demo adds higher-level failures under `AdbManager` and
