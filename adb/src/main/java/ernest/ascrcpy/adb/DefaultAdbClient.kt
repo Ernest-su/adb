@@ -227,7 +227,7 @@ class DefaultAdbClient(
         require(remotePath.startsWith('/') && '\u0000' !in remotePath) { "Remote path must be absolute" }
         val features = (mutableState.value as? AdbConnectionState.Connected)
             ?.device?.properties?.get("features").orEmpty().split(',')
-        val v2 = "stat_v2" in features
+        val v2 = "ls_v2" in features
         val channel = open("sync:")
         try {
             channel.writeSync(if (v2) "LIS2" else "LIST", remotePath.toByteArray(Charsets.UTF_8))
@@ -391,7 +391,7 @@ class DefaultAdbClient(
     }
 
     companion object {
-        private val CLIENT_BANNER = "host::features=shell_v2,cmd,stat_v2\u0000".toByteArray()
+        private val CLIENT_BANNER = "host::features=shell_v2,cmd,stat_v2,ls_v2\u0000".toByteArray()
 
         fun factory(context: Context, network: Network? = null): AdbClientFactory {
             val appContext = context.applicationContext
