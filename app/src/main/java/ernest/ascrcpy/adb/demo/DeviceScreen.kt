@@ -22,8 +22,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -49,6 +52,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -86,6 +91,7 @@ internal fun DeviceScreen(onDisconnect: () -> Unit) {
     var requestedPath by remember { mutableStateOf<String?>(null) }
     var status by remember { mutableStateOf("") }
     var pendingDownload by remember { mutableStateOf<RemoteFile?>(null) }
+    var pendingDelete by remember { mutableStateOf<RemoteFile?>(null) }
     val failed = stringResource(R.string.status_operation_failed)
     val completed = stringResource(R.string.status_command_complete)
 
@@ -129,6 +135,32 @@ internal fun DeviceScreen(onDisconnect: () -> Unit) {
             files = emptyList()
             runOperation { files = manager.files(currentPath) }
         }
+    }
+
+    pendingDelete?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text(stringResource(R.string.delete_confirm_title)) },
+            text = {
+                Text(stringResource(
+                    if (entry.directory) R.string.delete_folder_confirm else R.string.delete_file_confirm,
+                    entry.path))
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingDelete = null
+                    runOperation {
+                        status = context.getString(R.string.status_deleting, entry.name)
+                        manager.delete(entry)
+                        files = manager.files(currentPath)
+                        status = context.getString(R.string.status_delete_complete, entry.name)
+                    }
+                }, enabled = isConnected && !loading) { Text(stringResource(R.string.delete)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text(stringResource(R.string.cancel)) }
+            },
+        )
     }
 
     Column(Modifier.fillMaxSize().safeDrawingPadding()) {
@@ -280,6 +312,21 @@ internal fun DeviceScreen(onDisconnect: () -> Unit) {
                             if (entry.directory || entry.type == "file") {
                                 TextButton(onClick = { download(entry) }, enabled = isConnected && !loading) {
                                     Text(stringResource(R.string.download))
+                                }
+                            }
+                            Box {
+                                var menuExpanded by remember { mutableStateOf(false) }
+                                val moreActions = stringResource(R.string.file_actions)
+                                TextButton(onClick = { menuExpanded = true },
+                                    enabled = isConnected && !loading,
+                                    modifier = Modifier.semantics { contentDescription = moreActions }) {
+                                    Text("⋮")
+                                }
+                                DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                                    DropdownMenuItem(text = { Text(stringResource(R.string.delete)) }, onClick = {
+                                        menuExpanded = false
+                                        pendingDelete = entry
+                                    })
                                 }
                             }
                         }

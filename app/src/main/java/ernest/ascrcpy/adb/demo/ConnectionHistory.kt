@@ -1,7 +1,12 @@
 package ernest.ascrcpy.adb.demo
 
 import android.content.Context
+import android.util.Log
 import ernest.ascrcpy.adb.AdbClient
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -73,20 +78,29 @@ internal class ConnectionHistory(context: Context) {
 
 /** Owns the live connection while the connection and device pages change. */
 internal object DeviceSession {
+    private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     var client: AdbClient? = null
         private set
     var label: String = ""
         private set
 
     fun set(active: AdbClient, name: String) {
-        client?.takeIf { it !== active }?.close()
+        client?.takeIf { it !== active }?.let(::closeInBackground)
         client = active
         label = name
     }
 
     fun clear() {
-        client?.close()
+        val previous = client
         client = null
         label = ""
+        previous?.let(::closeInBackground)
+    }
+
+    private fun closeInBackground(active: AdbClient) {
+        cleanupScope.launch {
+            try { active.close() }
+            catch (error: Exception) { Log.w("DeviceSession", "Unable to close ADB connection", error) }
+        }
     }
 }

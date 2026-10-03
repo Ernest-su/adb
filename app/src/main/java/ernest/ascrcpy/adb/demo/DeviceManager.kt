@@ -57,6 +57,11 @@ class DeviceManager(private val context: Context, private val client: AdbClient)
         if (entry.directory) pullDirectory(entry.path, root, entry.name, progress) else pullFile(entry.path, root, entry.name, progress)
     }
 
+    suspend fun delete(entry: RemoteFile) = withContext(Dispatchers.IO) {
+        val output = client.shell(deleteCommand(entry)).text()
+        requireDeleteSuccess(output)
+    }
+
     private suspend fun pullDirectory(remotePath: String, parent: DocumentFile, name: String, progress: (String) -> Unit) {
         val directory = parent.findFile(name)?.takeIf { it.isDirectory } ?: requireNotNull(parent.createDirectory(name)) { "Unable to create $name" }
         files(remotePath).forEach { child ->
@@ -80,6 +85,24 @@ class DeviceManager(private val context: Context, private val client: AdbClient)
 
     companion object {
         private const val TAG = "AdbDeviceManager"
+        private const val DELETE_EXIT_MARKER = "__ADB_DELETE_EXIT__:"
+        internal fun deleteCommand(entry: RemoteFile): String {
+            require(entry.path.startsWith('/') && entry.path != "/" && '\u0000' !in entry.path &&
+                entry.path.split('/').none { it == "." || it == ".." }) {
+                "Invalid remote path"
+            }
+            val option = if (entry.directory) "-r " else ""
+            return "rm ${option}-- ${quote(entry.path)} 2>&1; printf '\\n${DELETE_EXIT_MARKER}%s\\n' \"${'$'}?\""
+        }
+        internal fun requireDeleteSuccess(output: String) {
+            val markerAt = output.lastIndexOf(DELETE_EXIT_MARKER)
+            val exitCode = if (markerAt >= 0)
+                output.substring(markerAt + DELETE_EXIT_MARKER.length).trim().toIntOrNull() else null
+            if (exitCode != 0) {
+                val detail = if (markerAt >= 0) output.substring(0, markerAt).trim() else output.trim()
+                throw IllegalStateException(detail.ifBlank { "Remote delete failed (exit code ${exitCode ?: "unknown"})" })
+            }
+        }
         fun normalize(path: String): String = (if (path.startsWith('/')) path else "/$path").replace(Regex("/+"), "/").removeSuffix("/").ifEmpty { "/" }
         fun parent(path: String): String = normalize(path).substringBeforeLast('/', "").ifEmpty { "/" }
         fun child(parent: String, name: String): String = if (parent == "/") "/$name" else "$parent/$name"

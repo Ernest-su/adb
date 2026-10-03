@@ -35,6 +35,13 @@
     <string name="open_folder">打开文件夹</string>
     <string name="download">下载</string>
     <string name="download_folder">下载文件夹</string>
+    <string name="file_actions">文件操作</string>
+    <string name="delete">删除</string>
+    <string name="delete_confirm_title">从设备中删除？</string>
+    <string name="delete_file_confirm">确定从已连接设备中永久删除 %1$s 吗？</string>
+    <string name="delete_folder_confirm">确定从已连接设备中永久删除 %1$s 及其全部内容吗？</string>
+    <string name="status_deleting">正在删除 %1$s…</string>
+    <string name="status_delete_complete">已删除 %1$s</string>
     <string name="loading_apps">正在加载应用…</string>
     <string name="loading_files">正在加载文件…</string>
     <string name="app_count">共 %1$d 个应用</string>

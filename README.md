@@ -38,6 +38,9 @@ type, size, and modification time through the ADB sync `LIST` or
 Tap a file's download button or **Download folder** and choose a local destination with
 Android's system folder picker. Downloads use ADB sync `RECV` and require no software to be
 installed on the target. Symbolic links are shown but are not followed during folder downloads.
+The file actions menu can delete a remote file, link, or folder after confirmation. Folder
+deletion includes its contents and uses the standard ADB shell service; the app reports shell
+failures and refreshes the listing after a successful delete.
 Successful TCP, wireless pairing code, wireless QR, and USB connections are saved in separate
 histories. Selecting a saved device starts a new connection; opening the app does not reconnect
 automatically. Pairing secrets are not saved. Wireless history uses discovery to find the current

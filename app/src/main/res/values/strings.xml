@@ -35,6 +35,13 @@
     <string name="open_folder">Open folder</string>
     <string name="download">Download</string>
     <string name="download_folder">Download folder</string>
+    <string name="file_actions">File actions</string>
+    <string name="delete">Delete</string>
+    <string name="delete_confirm_title">Delete from device?</string>
+    <string name="delete_file_confirm">Permanently delete %1$s from the connected device?</string>
+    <string name="delete_folder_confirm">Permanently delete %1$s and everything inside it from the connected device?</string>
+    <string name="status_deleting">Deleting %1$s…</string>
+    <string name="status_delete_complete">Deleted %1$s</string>
     <string name="loading_apps">Loading applications…</string>
     <string name="loading_files">Loading files…</string>
     <string name="app_count">%1$d applications</string>

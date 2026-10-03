@@ -1,6 +1,7 @@
 package ernest.ascrcpy.adb.demo
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DeviceManagerTest {
@@ -13,6 +14,19 @@ class DeviceManagerTest {
 
     @Test fun quotesShellValues() {
         assertEquals("'/sdcard/a'\\''b'", DeviceManager.quote("/sdcard/a'b"))
+    }
+
+    @Test fun deleteUsesQuotedPathAndChecksShellResult() {
+        val file = RemoteFile("a'b.txt", "/sdcard/a'b.txt", 0x8000, 1, 0)
+        val folder = RemoteFile("folder", "/sdcard/folder", 0x4000, 0, 0)
+        assertTrue(DeviceManager.deleteCommand(file).startsWith("rm -- '/sdcard/a'\\''b.txt' 2>&1;"))
+        assertTrue(DeviceManager.deleteCommand(folder).startsWith("rm -r -- '/sdcard/folder' 2>&1;"))
+        DeviceManager.requireDeleteSuccess("\n__ADB_DELETE_EXIT__:0\n")
+        assertTrue(runCatching {
+            DeviceManager.requireDeleteSuccess("rm: permission denied\n__ADB_DELETE_EXIT__:1\n")
+        }.exceptionOrNull()?.message?.contains("permission denied") == true)
+        assertTrue(runCatching { DeviceManager.requireDeleteSuccess("unexpected output") }.isFailure)
+        assertTrue(runCatching { DeviceManager.deleteCommand(file.copy(path = "/sdcard/../")) }.isFailure)
     }
 
     @Test fun recognizesTailscaleAddresses() {

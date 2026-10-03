@@ -56,6 +56,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
@@ -393,7 +394,9 @@ class MainActivity : ComponentActivity() {
             DeviceSession.set(active, if (record.kind == Mode.USB.name) record.usbName else "${record.host}:${record.port}")
             if (backStack.lastOrNull() != DeviceRoute) backStack.add(DeviceRoute)
         } catch (error: Throwable) {
-            active.close()
+            withContext(NonCancellable + Dispatchers.IO) {
+                runCatching { active.close() }.onFailure { Log.w(TAG, "Unable to close failed ADB connection", it) }
+            }
             throw error
         }
     }
