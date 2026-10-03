@@ -10,7 +10,7 @@ Add `maven { url = uri("https://jitpack.io") }` to `dependencyResolutionManageme
 
 ```kotlin
 dependencies {
-    implementation("com.github.Ernest-su:adb:v0.2.1")
+    implementation("com.github.Ernest-su:adb:v0.3.0")
 }
 ```
 

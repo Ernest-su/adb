@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.github.Ernest-su"
-version = System.getenv("VERSION") ?: "0.2.1-SNAPSHOT"
+version = System.getenv("VERSION") ?: "0.3.0-SNAPSHOT"
 
 android {
     namespace = "ernest.ascrcpy.adb"
