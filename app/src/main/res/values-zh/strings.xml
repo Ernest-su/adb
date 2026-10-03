@@ -24,7 +24,7 @@
     <string name="connect_wireless">连接无线调试</string>
     <string name="pair_qr">展示配对二维码</string>
     <string name="connect_usb">连接 USB</string>
-    <string name="device_actions">已连接设备</string>
+    <string name="device_actions">操作已连接设备</string>
     <string name="read_model">读取设备型号</string>
     <string name="disconnect">断开连接</string>
     <string name="model_output">设备型号</string>

@@ -24,7 +24,7 @@
     <string name="connect_wireless">Connect wireless</string>
     <string name="pair_qr">Show pairing QR code</string>
     <string name="connect_usb">Connect USB</string>
-    <string name="device_actions">Connected device</string>
+    <string name="device_actions">Device actions</string>
     <string name="read_model">Read device model</string>
     <string name="disconnect">Disconnect</string>
     <string name="model_output">Device model</string>

@@ -493,6 +493,7 @@ class MainActivity : Activity() {
     }
 
     private fun appendLog(message: String) {
+        Log.i(TAG, message)
         val time = DateFormat.getTimeInstance(DateFormat.MEDIUM, resources.configuration.locales[0])
             .format(Date())
         logLines.addLast(getString(R.string.log_entry, time, message))
