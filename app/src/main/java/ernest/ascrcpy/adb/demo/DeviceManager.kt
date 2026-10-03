@@ -12,8 +12,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 data class DeviceInfo(val model: String, val manufacturer: String, val android: String, val sdk: String, val abi: String, val serial: String)
-data class AppInfo(val name: String, val packageName: String, val versionName: String, val versionCode: String, val system: Boolean)
-enum class AppAction { CLEAR_DATA, UNINSTALL }
+data class AppInfo(val packageName: String, val versionName: String, val versionCode: String,
+    val system: Boolean, val enabled: Boolean = true)
+enum class AppAction { CLEAR_DATA, DISABLE, ENABLE, UNINSTALL }
 data class RemoteFile(val name: String, val path: String, val mode: Int, val size: Long, val modifiedSeconds: Long) {
     val directory: Boolean get() = mode and 0xF000 == 0x4000
     val type: String get() = when (mode and 0xF000) {
@@ -32,24 +33,26 @@ class DeviceManager(private val context: Context, private val client: AdbClient)
 
     suspend fun applications(): List<AppInfo> = withContext(Dispatchers.IO) {
         Log.i(TAG, "Loading application list")
-        val packages = shell("pm list packages -f").lineSequence().mapNotNull { line ->
+        val userId = currentUserId()
+        val disabled = shell("pm list packages -d --user $userId").lineSequence()
+            .filter { it.startsWith("package:") }.map { it.removePrefix("package:").trim() }.toSet()
+        val packages = shell("pm list packages -f --user $userId").lineSequence().mapNotNull { line ->
             if (!line.startsWith("package:")) return@mapNotNull null
             val raw = line.removePrefix("package:")
             val split = raw.lastIndexOf('=')
             if (split <= 0) null else raw.substring(split + 1).trim() to raw.substring(0, split)
         }.toList()
         packages.map { (pkg, apk) ->
-            AppInfo(pkg.substringAfterLast('.'), pkg, "—", "—",
+            AppInfo(pkg, "—", "—",
                 listOf("/system/", "/system_ext/", "/product/", "/vendor/", "/odm/")
-                    .any { apk.startsWith(it) })
-        }.sortedBy { it.name.lowercase() }
+                    .any { apk.startsWith(it) }, pkg !in disabled)
+        }.sortedBy { it.packageName.lowercase() }
     }
 
     suspend fun manageApp(action: AppAction, app: AppInfo) = withContext(Dispatchers.IO) {
-        val userId = shell("am get-current-user").trim().toIntOrNull()
-        requireNotNull(userId?.takeIf { it >= 0 }) { "Unable to determine current device user" }
+        val userId = currentUserId()
         val result = client.shell(appCommand(action, app.packageName, userId))
-        requireAppSuccess(result.text(), result.exitCode)
+        requireAppSuccess(action, app.packageName, result.text(), result.exitCode)
     }
 
     suspend fun files(path: String): List<RemoteFile> = withContext(Dispatchers.IO) {
@@ -90,6 +93,8 @@ class DeviceManager(private val context: Context, private val client: AdbClient)
 
     private suspend fun props(vararg names: String): List<String> = names.map { shell("getprop ${quote(it)}").trim().ifBlank { "—" } }
     private suspend fun shell(command: String): String = client.shell(command).text()
+    private suspend fun currentUserId(): Int = shell("am get-current-user").trim().toIntOrNull()
+        ?.takeIf { it >= 0 } ?: error("Unable to determine current device user")
 
     companion object {
         private const val TAG = "AdbDeviceManager"
@@ -98,11 +103,21 @@ class DeviceManager(private val context: Context, private val client: AdbClient)
             require(userId >= 0 && packageName.matches(Regex("[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)+"))) {
                 "Invalid package name or device user"
             }
-            val operation = if (action == AppAction.CLEAR_DATA) "clear" else "uninstall"
+            val operation = when (action) {
+                AppAction.CLEAR_DATA -> "clear"
+                AppAction.DISABLE -> "disable-user"
+                AppAction.ENABLE -> "enable"
+                AppAction.UNINSTALL -> "uninstall"
+            }
             return "pm $operation --user $userId ${quote(packageName)}"
         }
-        internal fun requireAppSuccess(output: String, exitCode: Int?) {
-            if (exitCode != null && exitCode != 0 || output.trim() != "Success") {
+        internal fun requireAppSuccess(action: AppAction, packageName: String, output: String, exitCode: Int?) {
+            val expected = when (action) {
+                AppAction.CLEAR_DATA, AppAction.UNINSTALL -> "Success"
+                AppAction.DISABLE -> "Package $packageName new state: disabled-user"
+                AppAction.ENABLE -> "Package $packageName new state: enabled"
+            }
+            if ((exitCode != null && exitCode != 0) || output.trim() != expected) {
                 throw IllegalStateException(output.trim().ifBlank { "Package manager operation failed" })
             }
         }

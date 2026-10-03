@@ -32,7 +32,8 @@ try {
 The demo app provides TCP, Wireless debugging, and USB connection flows. After connecting,
 the Compose UI navigates to a device page using Navigation 3. Its tabs provide ADB shell
 command testing, an application list, and a file browser. The application list queries installed
-package names with the standard ADB shell service. It can clear an app's data or uninstall it for the current device user after
+package names with the standard ADB shell service. It shows whether each package is disabled for
+the current device user, and can disable or enable it after confirmation. It can also clear app data or uninstall the app for the current user after
 confirmation; the demo checks the package manager's reported result before showing success.
 The file browser reads file type, size, and modification time through the ADB sync `LIST` or
 `LIS2` service. Tap a folder to navigate, enter a path directly, or use **Parent folder**.
