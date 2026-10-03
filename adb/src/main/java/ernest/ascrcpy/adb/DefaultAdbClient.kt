@@ -223,6 +223,63 @@ class DefaultAdbClient(
         }
     }
 
+    override suspend fun listFiles(remotePath: String): List<AdbFileEntry> = operationMutex.withLock {
+        require(remotePath.startsWith('/') && '\u0000' !in remotePath) { "Remote path must be absolute" }
+        val features = (mutableState.value as? AdbConnectionState.Connected)
+            ?.device?.properties?.get("features").orEmpty().split(',')
+        val v2 = "stat_v2" in features
+        val channel = open("sync:")
+        try {
+            channel.writeSync(if (v2) "LIS2" else "LIST", remotePath.toByteArray(Charsets.UTF_8))
+            val result = mutableListOf<AdbFileEntry>()
+            val headerSize = if (v2) 76 else 20
+            while (true) {
+                val id = channel.readExactly(4).toString(Charsets.US_ASCII)
+                if (id == "FAIL") {
+                    val length = ByteBuffer.wrap(channel.readExactly(4)).order(ByteOrder.LITTLE_ENDIAN).int
+                    if (length !in 0..65536) throw AdbProtocolException("Invalid sync error length: $length")
+                    throw AdbException(channel.readExactly(length).toString(Charsets.UTF_8))
+                }
+                if (id != "DONE" && id != if (v2) "DNT2" else "DENT") {
+                    throw AdbProtocolException("Unexpected sync list response: $id")
+                }
+                val header = ByteBuffer.wrap(channel.readExactly(headerSize - 4)).order(ByteOrder.LITTLE_ENDIAN)
+                if (id == "DONE") break
+                val error: Int
+                val mode: Int
+                val size: Long
+                val mtime: Long
+                val nameLength: Int
+                if (v2) {
+                    error = header.int
+                    header.position(20) // dev, ino
+                    mode = header.int
+                    header.position(36) // nlink, uid, gid
+                    size = header.long
+                    header.long // atime
+                    mtime = header.long
+                    header.long // ctime
+                    nameLength = header.int
+                } else {
+                    error = 0
+                    mode = header.int
+                    size = header.int.toLong() and 0xffffffffL
+                    mtime = header.int.toLong() and 0xffffffffL
+                    nameLength = header.int
+                }
+                if (nameLength !in 1..255) throw AdbProtocolException("Invalid sync filename length: $nameLength")
+                val name = channel.readExactly(nameLength).toString(Charsets.UTF_8)
+                if (name != "." && name != ".." && error == 0) {
+                    val path = if (remotePath == "/") "/$name" else "${remotePath.trimEnd('/')}/$name"
+                    result += AdbFileEntry(name, path, mode, size, mtime)
+                }
+            }
+            result
+        } finally {
+            channel.close()
+        }
+    }
+
     override suspend fun open(service: String): AdbChannel {
         check(transport != null) { "ADB client is not connected" }
         require(service.isNotBlank() && '\u0000' !in service)

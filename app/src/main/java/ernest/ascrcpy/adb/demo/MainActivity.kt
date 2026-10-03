@@ -7,6 +7,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
@@ -64,13 +65,22 @@ class MainActivity : Activity() {
     private lateinit var pairingPortInput: EditText
     private lateinit var pairingCodeInput: EditText
     private lateinit var shellButton: Button
+    private lateinit var appsButton: Button
+    private lateinit var filesButton: Button
     private lateinit var disconnectButton: Button
+    private lateinit var browserPanel: LinearLayout
+    private lateinit var navigationPanel: LinearLayout
+    private lateinit var parentButton: Button
+    private lateinit var listPanel: LinearLayout
+    private lateinit var pathInput: EditText
     private lateinit var statusView: TextView
     private lateinit var outputView: TextView
     private lateinit var logView: TextView
     private var qrDialog: AlertDialog? = null
     private var qrDiscovery: QrPairingDiscovery? = null
     private var qrJob: Job? = null
+    private var pendingDownload: RemoteFile? = null
+    private var currentPath = "/sdcard"
 
     private val usbManager by lazy { getSystemService(Context.USB_SERVICE) as UsbManager }
     private val usbPermissionAction by lazy { "$packageName.USB_PERMISSION" }
@@ -140,9 +150,27 @@ class MainActivity : Activity() {
 
         content.addView(heading(R.string.device_actions))
         shellButton = button(R.string.read_model) { readDeviceModel() }
+        appsButton = button(R.string.show_apps) { showApplications() }
+        filesButton = button(R.string.browse_files) { openBrowser() }
         disconnectButton = button(R.string.disconnect) { disconnect() }
         content.addView(shellButton)
+        content.addView(appsButton)
+        content.addView(filesButton)
         content.addView(disconnectButton)
+        browserPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
+        content.addView(browserPanel)
+        navigationPanel = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        pathInput = field(R.string.remote_path_hint, false).apply {
+            setText(currentPath)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        navigationPanel.addView(pathInput)
+        navigationPanel.addView(button(R.string.go_to_path) { loadFiles(pathInput.text.toString()) })
+        browserPanel.addView(navigationPanel)
+        parentButton = button(R.string.parent_folder) { loadFiles(DeviceManager.parent(currentPath)) }
+        browserPanel.addView(parentButton)
+        listPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        browserPanel.addView(listPanel)
         statusView = TextView(this).apply { textSize = 16f }
         content.addView(statusView)
         content.addView(heading(R.string.model_output))
@@ -226,10 +254,10 @@ class MainActivity : Activity() {
         setSingleLine()
     }
 
-    private fun button(label: Int, action: () -> Unit) = Button(this).apply {
+    private fun button(label: Int, track: Boolean = true, action: () -> Unit) = Button(this).apply {
         setText(label)
         setOnClickListener { action() }
-        if (label != R.string.clear_log) actionButtons.add(this)
+        if (track && label != R.string.clear_log) actionButtons.add(this)
     }
 
     private fun connectTcp() {
@@ -238,6 +266,7 @@ class MainActivity : Activity() {
             showStatus(R.string.status_connecting, endpoint.serial)
             outputView.text = ""
             connected = false
+            clearBrowser()
             withContext(Dispatchers.IO) {
                 client?.close()
                 client = DefaultAdbClient.factory(applicationContext).create()
@@ -305,6 +334,7 @@ class MainActivity : Activity() {
                     val useTailscale = host.isTailscaleAddress()
                     val endpoint = AdbEndpoint(if (useTailscale) host else connection.host, connection.port)
                     connected = false
+                    clearBrowser()
                     withContext(Dispatchers.IO) {
                         client?.close()
                         client = DefaultAdbClient.factory(applicationContext).create()
@@ -381,6 +411,7 @@ class MainActivity : Activity() {
                                     connection.port,
                                 )
                                 connected = false
+                                clearBrowser()
                                 withContext(Dispatchers.IO) {
                                     client?.close()
                                     client = DefaultAdbClient.factory(applicationContext).create()
@@ -443,6 +474,7 @@ class MainActivity : Activity() {
     private fun connectUsb(device: UsbDevice) = launchAction {
         showStatus(R.string.status_usb_connecting, device.deviceName)
         connected = false
+        clearBrowser()
         withContext(Dispatchers.IO) {
             client?.close()
             client = DefaultAdbClient.factory(applicationContext).create()
@@ -460,10 +492,112 @@ class MainActivity : Activity() {
         showStatus(R.string.status_command_complete)
     }
 
+    private fun showApplications() = launchAction {
+        browserPanel.visibility = View.VISIBLE
+        navigationPanel.visibility = View.GONE
+        parentButton.visibility = View.GONE
+        listPanel.removeAllViews()
+        listPanel.addView(description(R.string.loading_apps))
+        val apps = DeviceManager(this@MainActivity, checkNotNull(client)).applications()
+        listPanel.removeAllViews()
+        listPanel.addView(heading(R.string.show_apps))
+        listPanel.addView(TextView(this@MainActivity).apply { text = getString(R.string.app_count, apps.size) })
+        apps.forEach { app ->
+            listPanel.addView(TextView(this@MainActivity).apply {
+                text = getString(if (app.system) R.string.app_system_row else R.string.app_user_row, app.packageName)
+                textSize = 15f
+                setPadding(8.dp, 7.dp, 8.dp, 7.dp)
+                setTextIsSelectable(true)
+            })
+        }
+        showStatus(R.string.status_apps_loaded, apps.size)
+    }
+
+    private fun openBrowser() {
+        browserPanel.visibility = View.VISIBLE
+        navigationPanel.visibility = View.VISIBLE
+        parentButton.visibility = View.VISIBLE
+        loadFiles(currentPath)
+    }
+
+    private fun loadFiles(path: String): Unit {
+        launchAction {
+            val normalized = DeviceManager.normalize(path.trim())
+            listPanel.removeAllViews()
+            listPanel.addView(description(R.string.loading_files))
+            val entries = DeviceManager(this@MainActivity, checkNotNull(client)).files(normalized)
+            currentPath = normalized
+            pathInput.setText(currentPath)
+            listPanel.removeAllViews()
+            listPanel.addView(heading(R.string.remote_files))
+            if (entries.isEmpty()) listPanel.addView(description(R.string.empty_folder))
+            entries.forEach { entry ->
+                val row = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+                val type = when (entry.type) {
+                    "directory" -> getString(R.string.file_type_directory)
+                    "link" -> getString(R.string.file_type_link)
+                    "file" -> getString(R.string.file_type_file)
+                    else -> getString(R.string.file_type_other)
+                }
+                val title = if (entry.type == "file" || entry.directory) {
+                    button(if (entry.directory) R.string.open_folder else R.string.download, track = false) {
+                        if (entry.directory) loadFiles(entry.path) else chooseDownload(entry)
+                    }
+                } else TextView(this@MainActivity).apply {
+                    textSize = 16f
+                    setPadding(8.dp, 12.dp, 8.dp, 8.dp)
+                }
+                title.text = "$type  ${entry.name}"
+                row.addView(title)
+                row.addView(TextView(this@MainActivity).apply {
+                    text = getString(R.string.file_details, type, if (entry.directory) "—" else formatBytes(entry.size), formatTime(entry.modifiedSeconds))
+                    textSize = 13f
+                    setPadding(8.dp, 0, 8.dp, 4.dp)
+                })
+                if (entry.directory) row.addView(button(R.string.download_folder, track = false) { chooseDownload(entry) })
+                listPanel.addView(row)
+            }
+            showStatus(R.string.status_files_loaded, entries.size, currentPath)
+        }
+    }
+
+    private fun chooseDownload(entry: RemoteFile) {
+        if (busy) return
+        if (entry.type != "file" && entry.type != "directory") return
+        pendingDownload = entry
+        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        }, REQUEST_DOWNLOAD_FOLDER)
+    }
+
+    @Deprecated("Uses the platform document tree picker without an additional Activity dependency")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_DOWNLOAD_FOLDER) return
+        val entry = pendingDownload
+        pendingDownload = null
+        val uri: Uri = data?.data ?: return
+        if (resultCode != RESULT_OK || entry == null) return
+        launchAction {
+            showStatus(R.string.status_downloading, entry.name)
+            DeviceManager(this@MainActivity, checkNotNull(client)).download(entry, uri) { file ->
+                runOnUiThread { statusView.text = getString(R.string.status_label, getString(R.string.status_downloading, file)) }
+            }
+            showStatus(R.string.status_download_complete, entry.name)
+        }
+    }
+
     private fun disconnect() = launchAction {
         withContext(Dispatchers.IO) { client?.disconnect() }
         connected = false
+        clearBrowser()
         showStatus(R.string.status_disconnected)
+    }
+
+    private fun clearBrowser() {
+        browserPanel.visibility = View.GONE
+        listPanel.removeAllViews()
+        pendingDownload = null
     }
 
     private fun launchAction(action: suspend () -> Unit): Job? {
@@ -504,6 +638,8 @@ class MainActivity : Activity() {
     private fun updateButtons() {
         actionButtons.forEach { it.isEnabled = !busy }
         shellButton.isEnabled = connected && !busy
+        appsButton.isEnabled = connected && !busy
+        filesButton.isEnabled = connected && !busy
         disconnectButton.isEnabled = connected && !busy
     }
 
@@ -527,6 +663,7 @@ class MainActivity : Activity() {
     private companion object {
         const val TAG = "AdbDemo"
         const val STATE_MODE = "connection_mode"
+        const val REQUEST_DOWNLOAD_FOLDER = 41
     }
 }
 

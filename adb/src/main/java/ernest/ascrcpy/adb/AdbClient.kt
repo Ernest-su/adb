@@ -46,6 +46,18 @@ data class AdbCommandResult(
     fun text(): String = stdout.toString(Charsets.UTF_8)
 }
 
+/** Metadata returned by the standard ADB sync LIST service. */
+data class AdbFileEntry(
+    val name: String,
+    val path: String,
+    val mode: Int,
+    val size: Long,
+    val modifiedSeconds: Long,
+) {
+    val isDirectory: Boolean get() = mode and 0xF000 == 0x4000
+    val isLink: Boolean get() = mode and 0xF000 == 0xA000
+}
+
 /**
  * Stable, implementation-independent ADB facade consumed by applications.
  *
@@ -76,6 +88,10 @@ interface AdbClient : Closeable {
 
     /** Downloads a remote file through the ADB sync service. */
     suspend fun pull(remotePath: String, destination: OutputStream)
+
+    /** Lists a remote directory through the ADB sync service. */
+    suspend fun listFiles(remotePath: String): List<AdbFileEntry> =
+        throw UnsupportedOperationException("ADB sync directory listing is unavailable")
 
     /** Opens an arbitrary adbd service such as `localabstract:scrcpy_12345678`. */
     suspend fun open(service: String): AdbChannel
