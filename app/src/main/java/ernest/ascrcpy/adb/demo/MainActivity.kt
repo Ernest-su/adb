@@ -63,6 +63,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withTimeout
 
 class MainActivity : ComponentActivity() {
     private data object ConnectRoute
@@ -258,7 +259,7 @@ class MainActivity : ComponentActivity() {
             }
             pairingCode = ""
             showStatus(R.string.status_finding_connection, guid)
-            val service = discoverConnection(guid, 30_000)
+            val service = discoverConnection(guid, 30_000, host.takeIf(String::isTailscaleAddress))
             if (service == null) showStatus(R.string.status_connection_not_found, guid)
             else {
                 val endpoint = AdbEndpoint(if (host.isTailscaleAddress()) host else service.host, service.port)
@@ -289,15 +290,9 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             showStatus(R.string.status_finding_connection, guid)
-                            val connection = withTimeoutOrNull(30_000) {
-                                while (true) {
-                                    val candidate = connections.receive()
-                                    if (candidate.name.contains(guid, ignoreCase = true) || candidate.host == service.host) {
-                                        return@withTimeoutOrNull candidate
-                                    }
-                                }
-                                @Suppress("UNREACHABLE_CODE") null
-                            }
+                            val connection = awaitConnectableConnection(
+                                connections, guid, 30_000, fallbackHost = service.host,
+                            )
                             if (connection == null) showStatus(R.string.status_connection_not_found, guid)
                             else {
                                 val endpoint = AdbEndpoint(connection.host, connection.port)
@@ -337,7 +332,9 @@ class MainActivity : ComponentActivity() {
             }
             Mode.WIRELESS_CODE.name, Mode.WIRELESS_QR.name -> launchAction {
                 showStatus(R.string.status_finding_connection, record.guid)
-                val service = discoverConnection(record.guid, 10_000)
+                val service = discoverConnection(
+                    record.guid, 10_000, record.host.takeIf(String::isTailscaleAddress),
+                )
                 val endpoint = if (service != null) AdbEndpoint(
                     if (record.host.isTailscaleAddress()) record.host else service.host, service.port)
                 else AdbEndpoint(record.host, record.port)
@@ -347,20 +344,47 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private suspend fun discoverConnection(guid: String, timeout: Long): QrPairingDiscovery.ResolvedService? {
+    private suspend fun discoverConnection(
+        guid: String,
+        timeout: Long,
+        routeHost: String? = null,
+    ): QrPairingDiscovery.ResolvedService? {
         val connections = Channel<QrPairingDiscovery.ResolvedService>(Channel.UNLIMITED)
         val discovery = QrPairingDiscovery(this, null, {}, { connections.trySend(it) },
             { code -> if (code != null) Log.e(TAG, "NSD error $code") })
         return try {
             discovery.start()
-            withTimeoutOrNull(timeout) {
-                while (true) {
-                    val service = connections.receive()
-                    if (service.name.contains(guid, ignoreCase = true)) return@withTimeoutOrNull service
-                }
-                @Suppress("UNREACHABLE_CODE") null
-            }
+            awaitConnectableConnection(connections, guid, timeout, routeHost = routeHost)
         } finally { discovery.stop(); connections.close() }
+    }
+
+    private suspend fun awaitConnectableConnection(
+        connections: Channel<QrPairingDiscovery.ResolvedService>,
+        guid: String,
+        timeout: Long,
+        fallbackHost: String? = null,
+        routeHost: String? = null,
+    ): QrPairingDiscovery.ResolvedService? = withTimeoutOrNull(timeout) {
+        firstReachableWirelessService(
+            connections,
+            matches = { it.name.contains(guid, ignoreCase = true) || it.host == fallbackHost },
+        ) { candidate ->
+            probeWireless(AdbEndpoint(routeHost ?: candidate.host, candidate.port)).also { reachable ->
+                if (!reachable) Log.w(TAG, "Ignoring unreachable wireless ADB service ${candidate.name} at ${candidate.host}:${candidate.port}")
+            }
+        }
+    }
+
+    private suspend fun probeWireless(endpoint: AdbEndpoint): Boolean = withContext(Dispatchers.IO) {
+        DefaultAdbClient.factory(applicationContext).create().let { probe ->
+            try {
+                withTimeout(10_000) { probe.connectWireless(endpoint) }
+                true
+            } catch (error: Exception) {
+                Log.w(TAG, "Wireless ADB probe failed for ${endpoint.serial}", error)
+                false
+            } finally { probe.close() }
+        }
     }
 
     private fun selectUsb(record: ConnectionRecord? = null) {

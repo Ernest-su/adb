@@ -11,6 +11,7 @@ import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
 import java.security.SecureRandom
 import java.util.ArrayDeque
+import kotlinx.coroutines.channels.ReceiveChannel
 
 /** One QR pairing attempt. The QR secret is valid only for this discovery session. */
 internal class QrPairing {
@@ -33,6 +34,17 @@ internal class QrPairing {
 
     private fun randomText(length: Int) = buildString {
         repeat(length) { append(alphabet[random.nextInt(alphabet.length)]) }
+    }
+}
+
+internal suspend fun <T> firstReachableWirelessService(
+    services: ReceiveChannel<T>,
+    matches: (T) -> Boolean,
+    isReachable: suspend (T) -> Boolean,
+): T {
+    while (true) {
+        val candidate = services.receive()
+        if (matches(candidate) && isReachable(candidate)) return candidate
     }
 }
 
