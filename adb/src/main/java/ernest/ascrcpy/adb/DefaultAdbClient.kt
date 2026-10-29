@@ -180,10 +180,11 @@ class DefaultAdbClient(
         val channel = open("sync:")
         try {
             channel.writeSync("SEND", "$remotePath,$mode".toByteArray())
-            val buffer = ByteArray(64 * 1024)
+            val buffer = ByteArray(minOf(64 * 1024, peerMaxData) - 8)
             while (true) {
                 val count = source.read(buffer)
                 if (count < 0) break
+                if (count == 0) continue
                 channel.writeSync("DATA", buffer.copyOf(count))
             }
             channel.writeSync("DONE", ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN)
@@ -437,12 +438,14 @@ private suspend fun AdbChannel.readExactly(length: Int): ByteArray {
     return result
 }
 
-private suspend fun AdbChannel.writeSync(id: String, payload: ByteArray, payloadIsLength: Boolean = true) {
+internal suspend fun AdbChannel.writeSync(id: String, payload: ByteArray, payloadIsLength: Boolean = true) {
     require(id.length == 4)
-    val header = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
+    require(payloadIsLength || payload.size == 4)
+    val frame = ByteBuffer.allocate(8 + if (payloadIsLength) payload.size else 0).order(ByteOrder.LITTLE_ENDIAN)
         .put(id.toByteArray(Charsets.US_ASCII))
         .putInt(if (payloadIsLength) payload.size else ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN).int)
-        .array()
-    write(header)
-    if (payloadIsLength) write(payload)
+    if (payloadIsLength) frame.put(payload)
+    // Each write spends one negotiated ADB send window. Keep the sync header
+    // and body together instead of waiting for a separate eight-byte packet.
+    write(frame.array())
 }

@@ -29,6 +29,8 @@ try {
 
 `AdbClient`, `AdbChannel`, `AdbEndpoint`, `AdbKeyProvider`, and `AdbTransport` provide the stable public boundary. The default key provider stores its RSA identity in the application's no-backup directory. The target device can require the user to authorize it on first connection. Keep remote shell commands fixed and validate user input before composing them.
 
+File pushes use the sync v1 protocol. Each sync header and payload is sent in one channel write; DATA blocks fit the negotiated ADB payload limit, including the eight-byte header. This reduces send-window round trips without changing sync framing, permissions, or transport selection.
+
 The demo app provides TCP, Wireless debugging, and USB connection flows. After connecting,
 the Compose UI navigates to a device page using Navigation 3. Its tabs provide ADB shell
 command testing, an application list, and a file browser. The application list queries installed
