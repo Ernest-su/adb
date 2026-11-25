@@ -37,7 +37,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     implementation(project(":adb"))
     implementation("androidx.documentfile:documentfile:1.1.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("com.google.zxing:core:3.5.4")
     testImplementation("junit:junit:4.13.2")
 }
